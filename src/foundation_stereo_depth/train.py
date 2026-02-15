@@ -1,0 +1,352 @@
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import random
+import time
+from pathlib import Path
+from typing import Any
+
+import mlflow
+import numpy as np
+import torch
+from torch.optim import AdamW
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
+from .dataset import FoundationStereoDataset, StereoSample, discover_samples
+from .model import StereoUNet
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train stereo disparity model on FoundationStereo.")
+    parser.add_argument(
+        "--dataset-root",
+        type=str,
+        default="/home/geoffrey/Reference/OffTopic/Datasets/FoundationStereo",
+        help="Path to FoundationStereo dataset root.",
+    )
+    parser.add_argument("--height", type=int, default=240, help="Training image height.")
+    parser.add_argument("--width", type=int, default=320, help="Training image width.")
+    parser.add_argument("--epochs", type=int, default=10, help="Number of epochs.")
+    parser.add_argument("--batch-size", type=int, default=8, help="Batch size.")
+    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
+    parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay.")
+    parser.add_argument("--num-workers", type=int, default=4, help="DataLoader workers.")
+    parser.add_argument("--val-fraction", type=float, default=0.1, help="Validation fraction in [0, 1).")
+    parser.add_argument("--max-samples", type=int, default=0, help="Optional cap on number of samples.")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        help='Device to use: "auto", "cpu", "cuda", or explicit torch device string.',
+    )
+    parser.add_argument(
+        "--mlflow-tracking-uri",
+        type=str,
+        default="sqlite:///mlflow.db",
+        help="MLflow tracking URI.",
+    )
+    parser.add_argument(
+        "--mlflow-experiment",
+        type=str,
+        default="foundation-stereo-depth",
+        help="MLflow experiment name.",
+    )
+    parser.add_argument("--run-name", type=str, default=None, help="Optional MLflow run name.")
+    parser.add_argument("--output-dir", type=str, default="./outputs", help="Directory for checkpoints/config.")
+
+    parser.add_argument(
+        "--augment",
+        action="store_true",
+        help="Enable asymmetric RGB augmentations independently on left/right images.",
+    )
+    parser.add_argument(
+        "--brightness-jitter",
+        type=float,
+        default=0.25,
+        help="Brightness jitter amount; factor sampled from [1-x, 1+x].",
+    )
+    parser.add_argument(
+        "--contrast-jitter",
+        type=float,
+        default=0.25,
+        help="Contrast jitter amount; factor sampled from [1-x, 1+x].",
+    )
+    parser.add_argument(
+        "--hue-jitter",
+        type=float,
+        default=0.05,
+        help="Hue jitter amount; shift sampled from [-x, x].",
+    )
+    parser.add_argument(
+        "--noise-std-max",
+        type=float,
+        default=0.03,
+        help="Max stddev for additive Gaussian noise sampled in [0, x].",
+    )
+    return parser.parse_args()
+
+
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def resolve_device(device_arg: str) -> torch.device:
+    if device_arg == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(device_arg)
+
+
+def split_samples(samples: list[StereoSample], val_fraction: float, seed: int) -> tuple[list[StereoSample], list[StereoSample]]:
+    if not 0.0 <= val_fraction < 1.0:
+        raise ValueError(f"--val-fraction must be in [0, 1), got: {val_fraction}")
+
+    shuffled = list(samples)
+    random.Random(seed).shuffle(shuffled)
+
+    if val_fraction == 0.0:
+        return shuffled, []
+
+    val_count = int(len(shuffled) * val_fraction)
+    val_count = max(val_count, 1)
+    if val_count >= len(shuffled):
+        raise ValueError(
+            "Validation set consumes all data. Reduce --val-fraction or provide more samples."
+        )
+    train_samples = shuffled[:-val_count]
+    val_samples = shuffled[-val_count:]
+    return train_samples, val_samples
+
+
+def run_epoch(
+    model: StereoUNet,
+    loader: DataLoader[dict[str, torch.Tensor]],
+    device: torch.device,
+    optimizer: AdamW | None = None,
+) -> dict[str, float]:
+    is_training = optimizer is not None
+    model.train(is_training)
+
+    total_abs_error = 0.0
+    total_sq_error = 0.0
+    total_valid_pixels = 0
+
+    progress = tqdm(loader, leave=False)
+    for batch in progress:
+        inputs = batch["input"].to(device, non_blocking=True)
+        targets = batch["target"].to(device, non_blocking=True)
+        valid_mask = batch["valid_mask"].to(device, non_blocking=True)
+
+        if is_training:
+            optimizer.zero_grad(set_to_none=True)
+
+        with torch.set_grad_enabled(is_training):
+            predictions = model(inputs)
+            mask = valid_mask & torch.isfinite(targets)
+            valid_count = int(mask.sum().item())
+            if valid_count == 0:
+                continue
+
+            diff = predictions[mask] - targets[mask]
+            loss = diff.abs().mean()
+            if is_training:
+                loss.backward()
+                optimizer.step()
+
+        diff_detached = diff.detach()
+        total_valid_pixels += valid_count
+        total_abs_error += float(diff_detached.abs().sum().item())
+        total_sq_error += float(diff_detached.pow(2).sum().item())
+        progress.set_postfix({"mae": f"{diff_detached.abs().mean().item():.4f}"})
+
+    if total_valid_pixels == 0:
+        raise RuntimeError("No valid target pixels found for this epoch.")
+
+    mae = total_abs_error / total_valid_pixels
+    rmse = math.sqrt(total_sq_error / total_valid_pixels)
+    return {"loss": mae, "mae": mae, "rmse": rmse}
+
+
+def save_checkpoint(
+    checkpoint_path: Path,
+    epoch: int,
+    model: StereoUNet,
+    optimizer: AdamW,
+    args: argparse.Namespace,
+    metrics: dict[str, float],
+) -> None:
+    checkpoint = {
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "args": vars(args),
+        "metrics": metrics,
+    }
+    torch.save(checkpoint, checkpoint_path)
+
+
+def to_mlflow_params(args: argparse.Namespace, train_samples: int, val_samples: int, model: StereoUNet) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "dataset_root": str(Path(args.dataset_root).expanduser()),
+        "height": args.height,
+        "width": args.width,
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "lr": args.lr,
+        "weight_decay": args.weight_decay,
+        "val_fraction": args.val_fraction,
+        "seed": args.seed,
+        "device": args.device,
+        "train_samples": train_samples,
+        "val_samples": val_samples,
+        "num_parameters": sum(parameter.numel() for parameter in model.parameters()),
+        "augment": args.augment,
+    }
+    if args.augment:
+        params["brightness_jitter"] = args.brightness_jitter
+        params["contrast_jitter"] = args.contrast_jitter
+        params["hue_jitter"] = args.hue_jitter
+        params["noise_std_max"] = args.noise_std_max
+    if args.max_samples > 0:
+        params["max_samples"] = args.max_samples
+    return params
+
+
+def main() -> None:
+    args = parse_args()
+    set_seed(args.seed)
+
+    device = resolve_device(args.device)
+    print(f"Using device: {device}")
+
+    all_samples = discover_samples(args.dataset_root)
+    if args.max_samples > 0:
+        all_samples = all_samples[: args.max_samples]
+    if len(all_samples) < 2:
+        raise ValueError("Need at least two samples to create train/validation splits.")
+
+    train_samples, val_samples = split_samples(all_samples, args.val_fraction, args.seed)
+    print(f"Discovered {len(all_samples)} samples: train={len(train_samples)}, val={len(val_samples)}")
+
+    image_size = (args.height, args.width)
+    train_dataset = FoundationStereoDataset(
+        train_samples,
+        image_size=image_size,
+        augment=args.augment,
+        brightness_jitter=args.brightness_jitter,
+        contrast_jitter=args.contrast_jitter,
+        hue_jitter=args.hue_jitter,
+        noise_std_max=args.noise_std_max,
+    )
+    val_dataset = FoundationStereoDataset(val_samples, image_size=image_size) if val_samples else None
+
+    pin_memory = device.type == "cuda"
+    persistent_workers = args.num_workers > 0
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers,
+    )
+    val_loader = None
+    if val_dataset is not None:
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=args.num_workers,
+            pin_memory=pin_memory,
+            persistent_workers=persistent_workers,
+        )
+
+    model = StereoUNet(in_channels=6, out_channels=1).to(device)
+    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+    mlflow.set_tracking_uri(args.mlflow_tracking_uri)
+    mlflow.set_experiment(args.mlflow_experiment)
+    with mlflow.start_run(run_name=args.run_name):
+        active_run = mlflow.active_run()
+        if active_run is None:
+            raise RuntimeError("Failed to start MLflow run.")
+        run_id = active_run.info.run_id
+
+        output_dir = Path(args.output_dir).expanduser().resolve() / run_id
+        checkpoints_dir = output_dir / "checkpoints"
+        checkpoints_dir.mkdir(parents=True, exist_ok=True)
+        config_path = output_dir / "config.json"
+        config_path.write_text(json.dumps(vars(args), indent=2), encoding="utf-8")
+
+        mlflow.log_params(to_mlflow_params(args, len(train_samples), len(val_samples), model))
+        mlflow.log_artifact(str(config_path), artifact_path="config")
+
+        best_val_mae = float("inf")
+        best_epoch = -1
+        best_checkpoint = checkpoints_dir / "best.pt"
+        last_checkpoint = checkpoints_dir / "last.pt"
+
+        for epoch in range(1, args.epochs + 1):
+            start_time = time.time()
+            train_metrics = run_epoch(model, train_loader, device, optimizer=optimizer)
+            if val_loader is not None:
+                val_metrics = run_epoch(model, val_loader, device, optimizer=None)
+            else:
+                val_metrics = train_metrics
+
+            epoch_metrics = {
+                "train_loss": train_metrics["loss"],
+                "train_mae": train_metrics["mae"],
+                "train_rmse": train_metrics["rmse"],
+                "epoch_seconds": time.time() - start_time,
+            }
+            if val_loader is not None:
+                epoch_metrics["val_loss"] = val_metrics["loss"]
+                epoch_metrics["val_mae"] = val_metrics["mae"]
+                epoch_metrics["val_rmse"] = val_metrics["rmse"]
+            mlflow.log_metrics(epoch_metrics, step=epoch)
+
+            save_checkpoint(last_checkpoint, epoch, model, optimizer, args, epoch_metrics)
+            candidate_metric = val_metrics["mae"]
+            if candidate_metric < best_val_mae:
+                best_val_mae = candidate_metric
+                best_epoch = epoch
+                save_checkpoint(best_checkpoint, epoch, model, optimizer, args, epoch_metrics)
+
+            if val_loader is not None:
+                print(
+                    "Epoch "
+                    f"{epoch}/{args.epochs}: "
+                    f"train_mae={train_metrics['mae']:.4f}, val_mae={val_metrics['mae']:.4f}, "
+                    f"train_rmse={train_metrics['rmse']:.4f}, val_rmse={val_metrics['rmse']:.4f}"
+                )
+            else:
+                print(
+                    "Epoch "
+                    f"{epoch}/{args.epochs}: "
+                    f"train_mae={train_metrics['mae']:.4f}, train_rmse={train_metrics['rmse']:.4f}"
+                )
+
+        mlflow.set_tag("best_epoch", best_epoch)
+        mlflow.set_tag("best_val_mae", best_val_mae)
+        mlflow.log_artifact(str(last_checkpoint), artifact_path="checkpoints")
+        mlflow.log_artifact(str(best_checkpoint), artifact_path="checkpoints")
+
+        print(f"MLflow run: {run_id}")
+        print(f"Best validation MAE: {best_val_mae:.4f} at epoch {best_epoch}")
+        print(f"Checkpoints saved to: {checkpoints_dir}")
+        print(
+            "Launch MLflow UI with: "
+            f"uv run mlflow ui --backend-store-uri {args.mlflow_tracking_uri}"
+        )
+
+
+if __name__ == "__main__":
+    main()
