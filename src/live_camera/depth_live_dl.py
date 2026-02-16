@@ -27,6 +27,26 @@ COLORMAPS = {
 }
 
 
+class RectificationData:
+    def __init__(
+        self,
+        map_l_1: np.ndarray,
+        map_l_2: np.ndarray,
+        map_r_1: np.ndarray,
+        map_r_2: np.ndarray,
+        image_size: tuple[int, int],
+        focal_length_px: float,
+        baseline_m: float | None,
+    ) -> None:
+        self.map_l_1 = map_l_1
+        self.map_l_2 = map_l_2
+        self.map_r_1 = map_r_1
+        self.map_r_2 = map_r_2
+        self.image_size = image_size
+        self.focal_length_px = focal_length_px
+        self.baseline_m = baseline_m
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run live stereo depth estimation using the trained deep learning model."
@@ -189,16 +209,16 @@ def preprocess_rgb(frame_bgr: np.ndarray, model_size: tuple[int, int]) -> torch.
     return tensor
 
 
-def colorize_disparity(disparity: np.ndarray, colormap: int) -> np.ndarray:
-    valid = np.isfinite(disparity) & (disparity > 0.0)
+def colorize_scalar_map(values_2d: np.ndarray, colormap: int) -> np.ndarray:
+    valid = np.isfinite(values_2d) & (values_2d > 0.0)
     if not np.any(valid):
-        normalized = np.zeros(disparity.shape, dtype=np.uint8)
+        normalized = np.zeros(values_2d.shape, dtype=np.uint8)
     else:
-        values = disparity[valid]
-        lo = float(np.percentile(values, 5))
-        hi = float(np.percentile(values, 95))
+        values = values_2d[valid]
+        lo = float(np.percentile(values, 2))
+        hi = float(np.percentile(values, 98))
         scale = max(hi - lo, 1e-6)
-        normalized_float = np.clip((disparity - lo) / scale, 0.0, 1.0)
+        normalized_float = np.clip((values_2d - lo) / scale, 0.0, 1.0)
         normalized = (normalized_float * 255.0).astype(np.uint8)
         normalized[~valid] = 0
     return cv2.applyColorMap(normalized, colormap)
@@ -206,7 +226,7 @@ def colorize_disparity(disparity: np.ndarray, colormap: int) -> np.ndarray:
 
 def maybe_load_rectification(
     calibration_path: Path, use_rectification: bool
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, tuple[int, int]] | None:
+) -> RectificationData | None:
     if not use_rectification:
         return None
     if not calibration_path.exists():
@@ -224,6 +244,7 @@ def maybe_load_rectification(
     R2 = data["R2"]
     P1 = data["P1"]
     P2 = data["P2"]
+    T = data["T"] if "T" in data else None
     image_size = tuple(int(v) for v in data["image_size"].tolist())
 
     map_l_1, map_l_2 = cv2.initUndistortRectifyMap(
@@ -232,7 +253,64 @@ def maybe_load_rectification(
     map_r_1, map_r_2 = cv2.initUndistortRectifyMap(
         mtx_r, dist_r, R2, P2, image_size, cv2.CV_16SC2
     )
-    return map_l_1, map_l_2, map_r_1, map_r_2, image_size
+    focal_length_px = float(P1[0, 0])
+    baseline_m = estimate_baseline_m(P1=P1, P2=P2, T=T)
+    return RectificationData(
+        map_l_1,
+        map_l_2,
+        map_r_1,
+        map_r_2,
+        image_size,
+        focal_length_px,
+        baseline_m,
+    )
+
+
+def estimate_baseline_m(P1: np.ndarray | None, P2: np.ndarray | None, T: np.ndarray | None) -> float | None:
+    baseline_m = None
+    if P1 is not None and P2 is not None:
+        focal_px = float(P1[0, 0])
+        if np.isfinite(focal_px) and abs(focal_px) > 1e-9:
+            tx = float(P2[0, 3])
+            candidate = abs(-tx / focal_px)
+            if np.isfinite(candidate) and candidate > 0.0:
+                baseline_m = candidate
+    if baseline_m is None and T is not None:
+        t = np.asarray(T, dtype=np.float64).reshape(-1)
+        if t.size >= 3:
+            candidate = float(np.linalg.norm(t))
+            if np.isfinite(candidate) and candidate > 0.0:
+                baseline_m = candidate
+    return baseline_m
+
+
+def load_calibration_geometry(calibration_path: Path) -> tuple[float | None, float | None]:
+    if not calibration_path.exists():
+        return None, None
+
+    with np.load(calibration_path) as data:
+        P1 = data["P1"] if "P1" in data else None
+        P2 = data["P2"] if "P2" in data else None
+        T = data["T"] if "T" in data else None
+        if P1 is not None:
+            focal_px = float(P1[0, 0])
+        elif "mtx_l" in data:
+            focal_px = float(data["mtx_l"][0, 0])
+        else:
+            focal_px = None
+
+        baseline_m = estimate_baseline_m(P1=P1, P2=P2, T=T)
+
+    if focal_px is not None and (not np.isfinite(focal_px) or focal_px <= 0.0):
+        focal_px = None
+    return focal_px, baseline_m
+
+
+def disparity_to_depth(disparity: np.ndarray, focal_length_px: float, baseline_m: float) -> np.ndarray:
+    depth = np.full_like(disparity, np.nan, dtype=np.float32)
+    valid = np.isfinite(disparity) & (disparity > 1e-6)
+    depth[valid] = (focal_length_px * baseline_m) / disparity[valid]
+    return depth
 
 
 def main() -> None:
@@ -250,7 +328,15 @@ def main() -> None:
     checkpoint_mtime_ns = checkpoint_path.stat().st_mtime_ns
     next_poll_time = time.time() + args.checkpoint_poll_sec
 
+    calibration_focal_px, calibration_baseline_m = load_calibration_geometry(args.calibration)
     rectification = maybe_load_rectification(args.calibration, use_rectification=not args.no_rectify)
+    if rectification is not None:
+        calibration_focal_px = rectification.focal_length_px
+        calibration_baseline_m = rectification.baseline_m
+
+    focal_length_px = calibration_focal_px
+    baseline_m = calibration_baseline_m
+    depth_enabled = baseline_m is not None and focal_length_px is not None
 
     config = CameraConfig(
         width=args.width,
@@ -273,6 +359,10 @@ def main() -> None:
     print(f"Model checkpoint: {checkpoint_path}")
     if loaded_epoch >= 0:
         print(f"Loaded epoch: {loaded_epoch}")
+    if depth_enabled:
+        print(f"Depth conversion enabled: baseline={baseline_m:.6f} m, focal={focal_length_px:.2f} px")
+        if rectification is None:
+            print("Warning: running without rectification. Depth may be inaccurate unless inputs are pre-rectified.")
     print(f"Running live DL depth on device={device}. Press q or Esc to quit.")
 
     smoothed = None
@@ -287,7 +377,11 @@ def main() -> None:
             continue
 
         if rectification is not None:
-            map_l_1, map_l_2, map_r_1, map_r_2, image_size = rectification
+            map_l_1 = rectification.map_l_1
+            map_l_2 = rectification.map_l_2
+            map_r_1 = rectification.map_r_1
+            map_r_2 = rectification.map_r_2
+            image_size = rectification.image_size
             left_size = (frame_l.shape[1], frame_l.shape[0])
             right_size = (frame_r.shape[1], frame_r.shape[0])
             if left_size != image_size or right_size != image_size:
@@ -337,9 +431,21 @@ def main() -> None:
         x1 = min(w, cx + half + 1)
         patch = disparity[y0:y1, x0:x1]
         patch = patch[np.isfinite(patch) & (patch > 0.0)]
-        center_readout = float(np.median(patch)) if patch.size > 0 else float("nan")
+        center_disparity = float(np.median(patch)) if patch.size > 0 else float("nan")
 
-        depth_vis = colorize_disparity(disparity, COLORMAPS[args.colormap])
+        if depth_enabled:
+            depth_m = disparity_to_depth(disparity, float(focal_length_px), float(baseline_m))
+            depth_patch = depth_m[y0:y1, x0:x1]
+            depth_patch = depth_patch[np.isfinite(depth_patch) & (depth_patch > 0.0)]
+            center_depth_m = float(np.median(depth_patch)) if depth_patch.size > 0 else float("nan")
+            vis_map = depth_m
+            vis_title = "DL Depth (m)"
+        else:
+            center_depth_m = float("nan")
+            vis_map = disparity
+            vis_title = "DL Disparity"
+
+        depth_vis = colorize_scalar_map(vis_map, COLORMAPS[args.colormap])
         depth_vis = cv2.resize(depth_vis, (view_l.shape[1], view_l.shape[0]), interpolation=cv2.INTER_LINEAR)
 
         marker_x = int(cx * view_l.shape[1] / max(w, 1))
@@ -351,8 +457,15 @@ def main() -> None:
         previous_time = now
 
         readout_text = (
-            f"center disparity: {center_readout:.3f}" if np.isfinite(center_readout) else "center disparity: n/a"
+            f"center disparity: {center_disparity:.3f}"
+            if np.isfinite(center_disparity)
+            else "center disparity: n/a"
         )
+        if depth_enabled:
+            if np.isfinite(center_depth_m):
+                readout_text = f"{readout_text} | center depth: {center_depth_m:.3f} m"
+            else:
+                readout_text = f"{readout_text} | center depth: n/a"
         info_text = f"fps: {fps:.1f} | model: {args.model_width}x{args.model_height}"
         epoch_text = f"checkpoint epoch: {loaded_epoch if loaded_epoch >= 0 else 'unknown'}"
         cv2.putText(depth_vis, readout_text, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
@@ -361,7 +474,7 @@ def main() -> None:
 
         cv2.imshow("Left Camera (Rectified)" if rectification is not None else "Left Camera", view_l)
         cv2.imshow("Right Camera (Rectified)" if rectification is not None else "Right Camera", view_r)
-        cv2.imshow("DL Disparity", depth_vis)
+        cv2.imshow(vis_title, depth_vis)
 
         key = cv2.waitKey(1) & 0xFF
         if key in (ord("q"), 27):

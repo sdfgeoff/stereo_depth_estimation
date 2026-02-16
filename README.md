@@ -103,3 +103,4 @@ Notes:
 - `--watch-checkpoint` lets it pick up `last.pt` updates from training while running.
 - Use `--checkpoint /path/to/best.pt` to pin to a specific checkpoint file.
 - Use `--no-rectify` if you do not want to apply stereo calibration.
+- Depth conversion is automatic when calibration includes `P1/P2` or `T` (baseline and focal are read from calibration).
