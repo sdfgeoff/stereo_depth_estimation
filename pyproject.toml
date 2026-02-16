@@ -20,6 +20,7 @@ dependencies = [
 [project.scripts]
 foundation-stereo-depth = "foundation_stereo_depth.train:main"
 foundation-stereo-monitor = "foundation_stereo_depth.monitor:main"
+foundation-stereo-cache = "foundation_stereo_depth.cache:main"
 
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]

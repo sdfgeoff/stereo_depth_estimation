@@ -56,6 +56,26 @@ Augmentation knobs (applied independently to left/right when `--augment` is set)
 --noise-std-max 0.03
 ```
 
+## SSD Cache For Faster Training
+
+If the source dataset is on HDD, build a resized cache on SSD:
+
+```bash
+uv run foundation-stereo-cache \
+  --dataset-root /home/geoffrey/Reference/OffTopic/Datasets/FoundationStereo \
+  --cache-root /path/on/ssd/foundation_stereo_cache \
+  --height 240 \
+  --width 320
+```
+
+Then train using the cache:
+
+```bash
+uv run foundation-stereo-depth \
+  --cache-root /path/on/ssd/foundation_stereo_cache \
+  --require-cache
+```
+
 ## MLflow
 
 Training logs to:

@@ -58,6 +58,16 @@ def discover_samples(dataset_root: str | Path) -> list[StereoSample]:
     return samples
 
 
+def sample_cache_relpath(sample: StereoSample) -> Path:
+    left_parts = sample.left_rgb_path.parts
+    scene_name = sample.left_rgb_path.parents[4].name
+    if "dataset" in left_parts:
+        dataset_index = left_parts.index("dataset")
+        if dataset_index > 0:
+            scene_name = left_parts[dataset_index - 1]
+    return Path(scene_name) / f"{sample.disparity_path.stem}.npz"
+
+
 class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
     def __init__(
         self,
@@ -71,6 +81,8 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
         blur_prob: float = 0.0,
         blur_sigma_max: float = 0.0,
         blur_kernel_size: int = 5,
+        cache_root: str | Path | None = None,
+        require_cache: bool = False,
     ) -> None:
         self.samples = list(samples)
         self.image_size = image_size
@@ -82,6 +94,8 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
         self.blur_prob = blur_prob
         self.blur_sigma_max = blur_sigma_max
         self.blur_kernel_size = blur_kernel_size
+        self.cache_root = Path(cache_root).expanduser().resolve() if cache_root is not None else None
+        self.require_cache = require_cache
 
         if not 0.0 <= self.blur_prob <= 1.0:
             raise ValueError(f"blur_prob must be in [0, 1], got {self.blur_prob}")
@@ -122,6 +136,29 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
         width_scale = resized_width / float(original_width)
         tensor = tensor * width_scale
         return tensor
+
+    def _load_cached_sample(
+        self, cache_file: Path
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
+        with np.load(cache_file) as cached:
+            if not {"left", "right", "disparity"}.issubset(cached.files):
+                return None
+
+            left_np = cached["left"]
+            right_np = cached["right"]
+            disparity_np = cached["disparity"]
+
+        if left_np.ndim != 3 or right_np.ndim != 3 or disparity_np.ndim != 2:
+            return None
+        if left_np.shape[:2] != self.image_size or right_np.shape[:2] != self.image_size:
+            return None
+        if disparity_np.shape != self.image_size:
+            return None
+
+        left = torch.from_numpy(left_np.astype(np.float32) / 255.0).permute(2, 0, 1)
+        right = torch.from_numpy(right_np.astype(np.float32) / 255.0).permute(2, 0, 1)
+        target = torch.from_numpy(disparity_np.astype(np.float32)).unsqueeze(0)
+        return left, right, target
 
     def _sample_jitter_factor(self, jitter: float) -> float:
         if jitter <= 0.0:
@@ -168,12 +205,31 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
         sample = self.samples[index]
-        left = self._load_rgb(sample.left_rgb_path)
-        right = self._load_rgb(sample.right_rgb_path)
+        left = None
+        right = None
+        target = None
+
+        if self.cache_root is not None:
+            cache_file = self.cache_root / sample_cache_relpath(sample)
+            if cache_file.exists():
+                loaded = self._load_cached_sample(cache_file)
+                if loaded is not None:
+                    left, right, target = loaded
+                elif self.require_cache:
+                    raise ValueError(
+                        f"Cache entry is invalid or shape-mismatched for sample: {cache_file}"
+                    )
+            elif self.require_cache:
+                raise FileNotFoundError(f"Required cache entry not found: {cache_file}")
+
+        if left is None or right is None or target is None:
+            left = self._load_rgb(sample.left_rgb_path)
+            right = self._load_rgb(sample.right_rgb_path)
+            target = self._load_disparity(sample.disparity_path)
+
         if self.augment:
             left = self._augment_rgb(left)
             right = self._augment_rgb(right)
-        target = self._load_disparity(sample.disparity_path)
         stereo_input = torch.cat([left, right], dim=0)
         valid_mask = target > 0.0
         return {

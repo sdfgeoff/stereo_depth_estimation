@@ -57,6 +57,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--run-name", type=str, default=None, help="Optional MLflow run name.")
     parser.add_argument("--output-dir", type=str, default="./outputs", help="Directory for checkpoints/config.")
+    parser.add_argument(
+        "--cache-root",
+        type=str,
+        default=None,
+        help="Optional cache root containing pre-resized samples built by foundation-stereo-cache.",
+    )
+    parser.add_argument(
+        "--require-cache",
+        action="store_true",
+        help="Fail if any requested sample is missing from --cache-root.",
+    )
 
     parser.add_argument(
         "--augment",
@@ -250,6 +261,9 @@ def to_mlflow_params(args: argparse.Namespace, train_samples: int, val_samples: 
         params["blur_prob"] = args.blur_prob
         params["blur_sigma_max"] = args.blur_sigma_max
         params["blur_kernel_size"] = args.blur_kernel_size
+    if args.cache_root:
+        params["cache_root"] = str(Path(args.cache_root).expanduser())
+    params["require_cache"] = args.require_cache
     if args.max_samples > 0:
         params["max_samples"] = args.max_samples
     return params
@@ -283,8 +297,19 @@ def main() -> None:
         blur_prob=args.blur_prob,
         blur_sigma_max=args.blur_sigma_max,
         blur_kernel_size=args.blur_kernel_size,
+        cache_root=args.cache_root,
+        require_cache=args.require_cache,
     )
-    val_dataset = FoundationStereoDataset(val_samples, image_size=image_size) if val_samples else None
+    val_dataset = (
+        FoundationStereoDataset(
+            val_samples,
+            image_size=image_size,
+            cache_root=args.cache_root,
+            require_cache=args.require_cache,
+        )
+        if val_samples
+        else None
+    )
 
     pin_memory = device.type == "cuda"
     persistent_workers = args.num_workers > 0
