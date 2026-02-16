@@ -16,7 +16,7 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from foundation_stereo_depth.model import StereoUNet
+from foundation_stereo_depth.model import StereoUNet, load_state_dict_compat
 
 
 COLORMAPS = {
@@ -200,7 +200,12 @@ def load_checkpoint(model: StereoUNet, checkpoint_path: Path, device: torch.devi
         state_dict = checkpoint
         epoch = -1
 
-    model.load_state_dict(state_dict, strict=True)
+    missing_keys, unexpected_keys = load_state_dict_compat(model, state_dict)
+    if missing_keys or unexpected_keys:
+        print(
+            "Checkpoint compatibility load: "
+            f"missing={missing_keys} unexpected={unexpected_keys}"
+        )
     model.eval()
     return epoch
 

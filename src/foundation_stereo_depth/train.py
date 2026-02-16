@@ -134,8 +134,10 @@ def run_epoch(
     is_training = optimizer is not None
     model.train(is_training)
 
+    total_nll = 0.0
     total_abs_error = 0.0
     total_sq_error = 0.0
+    total_sigma = 0.0
     total_valid_pixels = 0
 
     progress = tqdm(loader, leave=False)
@@ -148,30 +150,41 @@ def run_epoch(
             optimizer.zero_grad(set_to_none=True)
 
         with torch.set_grad_enabled(is_training):
-            predictions = model(inputs)
+            predictions, logvar = model(inputs, return_uncertainty=True)
             mask = valid_mask & torch.isfinite(targets)
             valid_count = int(mask.sum().item())
             if valid_count == 0:
                 continue
 
             diff = predictions[mask] - targets[mask]
-            loss = diff.abs().mean()
+            abs_diff = diff.abs()
+            masked_logvar = logvar[mask]
+
+            # Heteroscedastic Laplace-style NLL with predicted per-pixel uncertainty.
+            nll = abs_diff * torch.exp(-masked_logvar) + masked_logvar
+            loss = nll.mean()
             if is_training:
                 loss.backward()
                 optimizer.step()
 
         diff_detached = diff.detach()
+        nll_detached = nll.detach()
+        sigma_detached = torch.exp(0.5 * masked_logvar.detach())
         total_valid_pixels += valid_count
+        total_nll += float(nll_detached.sum().item())
         total_abs_error += float(diff_detached.abs().sum().item())
         total_sq_error += float(diff_detached.pow(2).sum().item())
-        progress.set_postfix({"mae": f"{diff_detached.abs().mean().item():.4f}"})
+        total_sigma += float(sigma_detached.sum().item())
+        progress.set_postfix({"mae": f"{diff_detached.abs().mean().item():.4f}", "nll": f"{nll_detached.mean().item():.4f}"})
 
     if total_valid_pixels == 0:
         raise RuntimeError("No valid target pixels found for this epoch.")
 
+    nll_mean = total_nll / total_valid_pixels
     mae = total_abs_error / total_valid_pixels
     rmse = math.sqrt(total_sq_error / total_valid_pixels)
-    return {"loss": mae, "mae": mae, "rmse": rmse}
+    sigma_mean = total_sigma / total_valid_pixels
+    return {"loss": nll_mean, "nll": nll_mean, "mae": mae, "rmse": rmse, "sigma": sigma_mean}
 
 
 def save_checkpoint(
@@ -208,6 +221,8 @@ def to_mlflow_params(args: argparse.Namespace, train_samples: int, val_samples: 
         "val_samples": val_samples,
         "num_parameters": sum(parameter.numel() for parameter in model.parameters()),
         "augment": args.augment,
+        "uncertainty_head": True,
+        "loss": "heteroscedastic_l1_nll",
     }
     if args.augment:
         params["brightness_jitter"] = args.brightness_jitter
@@ -303,14 +318,18 @@ def main() -> None:
 
             epoch_metrics = {
                 "train_loss": train_metrics["loss"],
+                "train_nll": train_metrics["nll"],
                 "train_mae": train_metrics["mae"],
                 "train_rmse": train_metrics["rmse"],
+                "train_sigma": train_metrics["sigma"],
                 "epoch_seconds": time.time() - start_time,
             }
             if val_loader is not None:
                 epoch_metrics["val_loss"] = val_metrics["loss"]
+                epoch_metrics["val_nll"] = val_metrics["nll"]
                 epoch_metrics["val_mae"] = val_metrics["mae"]
                 epoch_metrics["val_rmse"] = val_metrics["rmse"]
+                epoch_metrics["val_sigma"] = val_metrics["sigma"]
             mlflow.log_metrics(epoch_metrics, step=epoch)
 
             save_checkpoint(last_checkpoint, epoch, model, optimizer, args, epoch_metrics)

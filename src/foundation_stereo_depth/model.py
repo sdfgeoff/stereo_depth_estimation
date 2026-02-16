@@ -5,6 +5,27 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def load_state_dict_compat(
+    model: nn.Module, state_dict: dict[str, torch.Tensor]
+) -> tuple[list[str], list[str]]:
+    mapped_state = dict(state_dict)
+
+    # Backward compatibility with older single-head checkpoints.
+    if "output_head.weight" in mapped_state and "disparity_head.weight" not in mapped_state:
+        mapped_state["disparity_head.weight"] = mapped_state.pop("output_head.weight")
+    if "output_head.bias" in mapped_state and "disparity_head.bias" not in mapped_state:
+        mapped_state["disparity_head.bias"] = mapped_state.pop("output_head.bias")
+
+    model_state = model.state_dict()
+    if "logvar_head.weight" not in mapped_state:
+        mapped_state["logvar_head.weight"] = model_state["logvar_head.weight"]
+    if "logvar_head.bias" not in mapped_state:
+        mapped_state["logvar_head.bias"] = model_state["logvar_head.bias"]
+
+    result = model.load_state_dict(mapped_state, strict=False)
+    return list(result.missing_keys), list(result.unexpected_keys)
+
+
 class ConvBlock(nn.Module):
     def __init__(self, in_channels: int, out_channels: int) -> None:
         super().__init__()
@@ -47,9 +68,12 @@ class StereoUNet(nn.Module):
         self.up1 = nn.ConvTranspose2d(c2, c1, kernel_size=2, stride=2)
         self.dec1 = ConvBlock(c1 + c1, c1)
 
-        self.output_head = nn.Conv2d(c1, out_channels, kernel_size=1)
+        self.disparity_head = nn.Conv2d(c1, out_channels, kernel_size=1)
+        self.logvar_head = nn.Conv2d(c1, 1, kernel_size=1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, return_uncertainty: bool = False
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         s1 = self.enc1(x)
         s2 = self.enc2(self.pool(s1))
         s3 = self.enc3(self.pool(s2))
@@ -66,4 +90,10 @@ class StereoUNet(nn.Module):
         d1 = self.dec1(torch.cat([d1, s1], dim=1))
 
         # Disparity is non-negative.
-        return F.softplus(self.output_head(d1))
+        disparity = F.softplus(self.disparity_head(d1))
+        if not return_uncertainty:
+            return disparity
+
+        # Bound log-variance to a stable range for training.
+        logvar = self.logvar_head(d1).clamp(min=-6.0, max=3.0)
+        return disparity, logvar

@@ -12,7 +12,7 @@ from PIL import Image
 from torch.utils.data import DataLoader
 
 from .dataset import FoundationStereoDataset, StereoSample, discover_samples
-from .model import StereoUNet
+from .model import StereoUNet, load_state_dict_compat
 
 
 def parse_args() -> argparse.Namespace:
@@ -163,7 +163,12 @@ def evaluate_checkpoint(
     checkpoint = torch.load(checkpoint_path, map_location=device)
 
     model = StereoUNet(in_channels=6, out_channels=1).to(device)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    missing_keys, unexpected_keys = load_state_dict_compat(model, checkpoint["model_state_dict"])
+    if missing_keys or unexpected_keys:
+        print(
+            "Checkpoint compatibility load: "
+            f"missing={missing_keys} unexpected={unexpected_keys}"
+        )
     model.eval()
 
     dataset = FoundationStereoDataset(probe_samples, image_size=image_size, augment=False)

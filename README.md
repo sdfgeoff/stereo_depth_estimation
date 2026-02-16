@@ -6,6 +6,9 @@ Train a PyTorch stereo disparity model on FoundationStereo with `uv` and track r
 
 - Input pipeline that concatenates left/right RGB images into a 6-channel tensor.
 - U-Net style encoder-decoder with skip connections and full-resolution disparity output.
+- Dual-head prediction:
+  - disparity map
+  - per-pixel uncertainty (`logvar`) trained with heteroscedastic loss.
 - FoundationStereo disparity decoding:
   - `depth = (R*255*255 + G*255 + B) / 1000`
 - Training at `320x240` by default.
