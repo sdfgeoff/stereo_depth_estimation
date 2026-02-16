@@ -83,3 +83,23 @@ Notes:
 - It writes metrics to `monitor_outputs/<RUN_ID>/latest_metrics.json` and `history.jsonl`.
 - Preview images (if enabled) are written to `monitor_outputs/<RUN_ID>/previews/`.
 - If `--run-id` is omitted, it auto-selects the most recently modified run in `outputs/`.
+
+## Live USB Stereo Inference
+
+Use the live OpenCV script to run the trained model on your USB stereo rig:
+
+```bash
+cd /home/geoffrey/Projects/foundation-stereo-depth
+uv run python src/live_camera/depth_live_dl.py \
+  --left 0 \
+  --right 2 \
+  --run-id <RUN_ID> \
+  --watch-checkpoint \
+  --device cpu
+```
+
+Notes:
+
+- `--watch-checkpoint` lets it pick up `last.pt` updates from training while running.
+- Use `--checkpoint /path/to/best.pt` to pin to a specific checkpoint file.
+- Use `--no-rectify` if you do not want to apply stereo calibration.
