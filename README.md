@@ -62,3 +62,24 @@ Start UI:
 ```bash
 uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
 ```
+
+## Monitor An Ongoing Run
+
+You can run a separate CPU-only monitor process that watches `last.pt`, evaluates a fixed probe subset, and optionally writes preview images:
+
+```bash
+CUDA_VISIBLE_DEVICES="" uv run foundation-stereo-monitor \
+  --run-id <RUN_ID> \
+  --watch \
+  --interval-sec 20 \
+  --num-samples 8 \
+  --split val \
+  --save-previews
+```
+
+Notes:
+
+- It reads checkpoints from `outputs/<RUN_ID>/checkpoints/last.pt`.
+- It writes metrics to `monitor_outputs/<RUN_ID>/latest_metrics.json` and `history.jsonl`.
+- Preview images (if enabled) are written to `monitor_outputs/<RUN_ID>/previews/`.
+- If `--run-id` is omitted, it auto-selects the most recently modified run in `outputs/`.
