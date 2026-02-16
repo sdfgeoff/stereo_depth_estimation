@@ -28,6 +28,7 @@ COLORMAPS = {
 DEPTH_VIS_RANGE_M = (0.0, 10.0)
 DEPTH_CONTOUR_STEP_M = 0.5
 DEPTH_CONTOUR_COLOR_BGR = (0, 255, 0)
+CONFIDENCE_COLORMAP = cv2.COLORMAP_VIRIDIS
 
 
 class RectificationData:
@@ -188,7 +189,7 @@ def resolve_checkpoint_path(args: argparse.Namespace) -> Path:
     return max(candidates, key=lambda path: path.stat().st_mtime_ns)
 
 
-def load_checkpoint(model: StereoUNet, checkpoint_path: Path, device: torch.device) -> int:
+def load_checkpoint(model: StereoUNet, checkpoint_path: Path, device: torch.device) -> tuple[int, bool]:
     checkpoint = torch.load(checkpoint_path, map_location=device)
     if not isinstance(checkpoint, dict):
         raise ValueError(f"Unexpected checkpoint format in {checkpoint_path}.")
@@ -200,6 +201,7 @@ def load_checkpoint(model: StereoUNet, checkpoint_path: Path, device: torch.devi
         state_dict = checkpoint
         epoch = -1
 
+    has_uncertainty_head = "logvar_head.weight" in state_dict and "logvar_head.bias" in state_dict
     missing_keys, unexpected_keys = load_state_dict_compat(model, state_dict)
     if missing_keys or unexpected_keys:
         print(
@@ -207,7 +209,7 @@ def load_checkpoint(model: StereoUNet, checkpoint_path: Path, device: torch.devi
             f"missing={missing_keys} unexpected={unexpected_keys}"
         )
     model.eval()
-    return epoch
+    return epoch, has_uncertainty_head
 
 
 def preprocess_rgb(frame_bgr: np.ndarray, model_size: tuple[int, int]) -> torch.Tensor:
@@ -356,6 +358,10 @@ def disparity_to_depth(disparity: np.ndarray, focal_length_px: float, baseline_m
     return depth
 
 
+def confidence_from_logvar(logvar: np.ndarray) -> np.ndarray:
+    return np.exp(-0.5 * logvar)
+
+
 def main() -> None:
     args = parse_args()
     if not 0.0 <= args.ema_alpha <= 1.0:
@@ -367,7 +373,7 @@ def main() -> None:
     checkpoint_path = resolve_checkpoint_path(args)
 
     model = StereoUNet(in_channels=6, out_channels=1).to(device)
-    loaded_epoch = load_checkpoint(model, checkpoint_path, device)
+    loaded_epoch, uncertainty_available = load_checkpoint(model, checkpoint_path, device)
     checkpoint_mtime_ns = checkpoint_path.stat().st_mtime_ns
     next_poll_time = time.time() + args.checkpoint_poll_sec
 
@@ -408,6 +414,10 @@ def main() -> None:
     print(f"Model checkpoint: {checkpoint_path}")
     if loaded_epoch >= 0:
         print(f"Loaded epoch: {loaded_epoch}")
+    if uncertainty_available:
+        print("Confidence visualization enabled from checkpoint uncertainty head.")
+    else:
+        print("Checkpoint does not include trained uncertainty head; confidence map disabled.")
     if depth_enabled:
         print(
             "Depth conversion enabled: "
@@ -453,9 +463,13 @@ def main() -> None:
             new_mtime_ns = checkpoint_path.stat().st_mtime_ns
             if new_mtime_ns != checkpoint_mtime_ns:
                 try:
-                    loaded_epoch = load_checkpoint(model, checkpoint_path, device)
+                    loaded_epoch, uncertainty_available = load_checkpoint(model, checkpoint_path, device)
                     checkpoint_mtime_ns = new_mtime_ns
                     print(f"Reloaded checkpoint at epoch {loaded_epoch}.")
+                    if uncertainty_available:
+                        print("Confidence visualization enabled from reloaded checkpoint.")
+                    else:
+                        print("Reloaded checkpoint has no uncertainty head; confidence map disabled.")
                 except Exception as exc:
                     print(f"Checkpoint reload skipped: {exc}")
             next_poll_time = time.time() + args.checkpoint_poll_sec
@@ -465,7 +479,9 @@ def main() -> None:
         model_input = torch.cat([left_tensor, right_tensor], dim=0).unsqueeze(0).to(device)
 
         with torch.inference_mode():
-            prediction = model(model_input)[0, 0].detach().cpu().numpy().astype(np.float32)
+            disparity_tensor, logvar_tensor = model(model_input, return_uncertainty=True)
+            prediction = disparity_tensor[0, 0].detach().cpu().numpy().astype(np.float32)
+            logvar = logvar_tensor[0, 0].detach().cpu().numpy().astype(np.float32)
 
         if args.ema_alpha > 0.0:
             if smoothed is None:
@@ -511,6 +527,17 @@ def main() -> None:
             vis_map = disparity
             vis_title = "DL Disparity"
 
+        center_confidence = float("nan")
+        if uncertainty_available:
+            confidence_map = confidence_from_logvar(logvar)
+            confidence_patch = confidence_map[y0:y1, x0:x1]
+            confidence_patch = confidence_patch[np.isfinite(confidence_patch) & (confidence_patch > 0.0)]
+            center_confidence = float(np.median(confidence_patch)) if confidence_patch.size > 0 else float("nan")
+            confidence_vis = colorize_scalar_map(confidence_map, CONFIDENCE_COLORMAP)
+            confidence_vis = cv2.resize(
+                confidence_vis, (view_l.shape[1], view_l.shape[0]), interpolation=cv2.INTER_LINEAR
+            )
+
         if depth_enabled:
             depth_vis = colorize_scalar_map(
                 vis_map, COLORMAPS[args.colormap], fixed_range=DEPTH_VIS_RANGE_M
@@ -539,9 +566,20 @@ def main() -> None:
                 readout_text = f"{readout_text} | center depth: n/a"
         info_text = f"fps: {fps:.1f} | model: {args.model_width}x{args.model_height}"
         epoch_text = f"checkpoint epoch: {loaded_epoch if loaded_epoch >= 0 else 'unknown'}"
+        if uncertainty_available and np.isfinite(center_confidence):
+            info_text = f"{info_text} | conf: {center_confidence:.3f}"
         cv2.putText(depth_vis, readout_text, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
         cv2.putText(depth_vis, info_text, (15, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
         cv2.putText(depth_vis, epoch_text, (15, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+        if uncertainty_available:
+            confidence_text = (
+                f"center confidence: {center_confidence:.3f}"
+                if np.isfinite(center_confidence)
+                else "center confidence: n/a"
+            )
+            cv2.putText(confidence_vis, confidence_text, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
+            cv2.putText(confidence_vis, info_text, (15, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+            cv2.putText(confidence_vis, epoch_text, (15, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
 
         cv2.imshow(
             "Left Camera (Rectified)" if rectification is not None else "Left Camera",
@@ -549,6 +587,13 @@ def main() -> None:
         )
         cv2.imshow("Right Camera (Rectified)" if rectification is not None else "Right Camera", view_r)
         cv2.imshow(vis_title, depth_vis)
+        if uncertainty_available:
+            cv2.imshow("DL Confidence", confidence_vis)
+        else:
+            try:
+                cv2.destroyWindow("DL Confidence")
+            except cv2.error:
+                pass
 
         key = cv2.waitKey(1) & 0xFF
         if key in (ord("q"), 27):

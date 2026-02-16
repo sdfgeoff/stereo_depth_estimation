@@ -108,4 +108,5 @@ Notes:
 - Use `--no-rectify` if you do not want to apply stereo calibration.
 - Depth conversion is automatic when calibration includes `P1/P2` or `T` (baseline and focal are read from calibration).
 - Depth math scales focal length from calibration width to model inference width.
+- For uncertainty-trained checkpoints, the live app also shows a `DL Confidence` window.
 - If a checkpoint was trained before disparity-resize scaling was fixed, its absolute depth scale may be biased; retrain for accurate metric depth.
