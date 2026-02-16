@@ -25,6 +25,9 @@ COLORMAPS = {
     "magma": cv2.COLORMAP_MAGMA,
     "viridis": cv2.COLORMAP_VIRIDIS,
 }
+DEPTH_VIS_RANGE_M = (0.0, 10.0)
+DEPTH_CONTOUR_STEP_M = 0.5
+DEPTH_CONTOUR_COLOR_BGR = (0, 255, 0)
 
 
 class RectificationData:
@@ -229,6 +232,28 @@ def colorize_scalar_map(
         normalized = (normalized_float * 255.0).astype(np.uint8)
         normalized[~valid] = 0
     return cv2.applyColorMap(normalized, colormap)
+
+
+def depth_contour_mask(
+    depth_m: np.ndarray,
+    contour_step_m: float,
+    min_depth_m: float,
+    max_depth_m: float,
+) -> np.ndarray:
+    valid = np.isfinite(depth_m) & (depth_m > min_depth_m) & (depth_m <= max_depth_m)
+    if not np.any(valid):
+        return np.zeros(depth_m.shape, dtype=np.uint8)
+
+    clipped_depth = np.clip(depth_m, min_depth_m, max_depth_m)
+    bins = np.full(depth_m.shape, -1, dtype=np.int32)
+    bins[valid] = np.floor((clipped_depth[valid] - min_depth_m) / contour_step_m).astype(np.int32)
+
+    edges = np.zeros(depth_m.shape, dtype=bool)
+    vertical_valid = valid[:-1, :] & valid[1:, :]
+    horizontal_valid = valid[:, :-1] & valid[:, 1:]
+    edges[:-1, :] |= vertical_valid & (bins[:-1, :] != bins[1:, :])
+    edges[:, :-1] |= horizontal_valid & (bins[:, :-1] != bins[:, 1:])
+    return (edges.astype(np.uint8)) * 255
 
 
 def maybe_load_rectification(
@@ -462,15 +487,29 @@ def main() -> None:
             depth_patch = depth_m[y0:y1, x0:x1]
             depth_patch = depth_patch[np.isfinite(depth_patch) & (depth_patch > 0.0)]
             center_depth_m = float(np.median(depth_patch)) if depth_patch.size > 0 else float("nan")
+            contour_mask = depth_contour_mask(
+                depth_m,
+                contour_step_m=DEPTH_CONTOUR_STEP_M,
+                min_depth_m=DEPTH_VIS_RANGE_M[0],
+                max_depth_m=DEPTH_VIS_RANGE_M[1],
+            )
+            contour_mask = cv2.resize(
+                contour_mask, (view_l.shape[1], view_l.shape[0]), interpolation=cv2.INTER_NEAREST
+            )
+            left_view_with_contours = view_l.copy()
+            left_view_with_contours[contour_mask > 0] = DEPTH_CONTOUR_COLOR_BGR
             vis_map = depth_m
             vis_title = "DL Depth (m)"
         else:
             center_depth_m = float("nan")
+            left_view_with_contours = view_l
             vis_map = disparity
             vis_title = "DL Disparity"
 
         if depth_enabled:
-            depth_vis = colorize_scalar_map(vis_map, COLORMAPS[args.colormap], fixed_range=(0.0, 10.0))
+            depth_vis = colorize_scalar_map(
+                vis_map, COLORMAPS[args.colormap], fixed_range=DEPTH_VIS_RANGE_M
+            )
         else:
             depth_vis = colorize_scalar_map(vis_map, COLORMAPS[args.colormap])
         depth_vis = cv2.resize(depth_vis, (view_l.shape[1], view_l.shape[0]), interpolation=cv2.INTER_LINEAR)
@@ -499,7 +538,10 @@ def main() -> None:
         cv2.putText(depth_vis, info_text, (15, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
         cv2.putText(depth_vis, epoch_text, (15, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
 
-        cv2.imshow("Left Camera (Rectified)" if rectification is not None else "Left Camera", view_l)
+        cv2.imshow(
+            "Left Camera (Rectified)" if rectification is not None else "Left Camera",
+            left_view_with_contours,
+        )
         cv2.imshow("Right Camera (Rectified)" if rectification is not None else "Right Camera", view_r)
         cv2.imshow(vis_title, depth_vis)
 
