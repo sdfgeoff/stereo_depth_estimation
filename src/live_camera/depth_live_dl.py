@@ -209,14 +209,21 @@ def preprocess_rgb(frame_bgr: np.ndarray, model_size: tuple[int, int]) -> torch.
     return tensor
 
 
-def colorize_scalar_map(values_2d: np.ndarray, colormap: int) -> np.ndarray:
+def colorize_scalar_map(
+    values_2d: np.ndarray,
+    colormap: int,
+    fixed_range: tuple[float, float] | None = None,
+) -> np.ndarray:
     valid = np.isfinite(values_2d) & (values_2d > 0.0)
     if not np.any(valid):
         normalized = np.zeros(values_2d.shape, dtype=np.uint8)
     else:
-        values = values_2d[valid]
-        lo = float(np.percentile(values, 2))
-        hi = float(np.percentile(values, 98))
+        if fixed_range is None:
+            values = values_2d[valid]
+            lo = float(np.percentile(values, 2))
+            hi = float(np.percentile(values, 98))
+        else:
+            lo, hi = fixed_range
         scale = max(hi - lo, 1e-6)
         normalized_float = np.clip((values_2d - lo) / scale, 0.0, 1.0)
         normalized = (normalized_float * 255.0).astype(np.uint8)
@@ -462,7 +469,10 @@ def main() -> None:
             vis_map = disparity
             vis_title = "DL Disparity"
 
-        depth_vis = colorize_scalar_map(vis_map, COLORMAPS[args.colormap])
+        if depth_enabled:
+            depth_vis = colorize_scalar_map(vis_map, COLORMAPS[args.colormap], fixed_range=(0.0, 10.0))
+        else:
+            depth_vis = colorize_scalar_map(vis_map, COLORMAPS[args.colormap])
         depth_vis = cv2.resize(depth_vis, (view_l.shape[1], view_l.shape[0]), interpolation=cv2.INTER_LINEAR)
 
         marker_x = int(cx * view_l.shape[1] / max(w, 1))
