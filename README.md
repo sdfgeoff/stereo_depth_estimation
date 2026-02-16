@@ -14,7 +14,7 @@ Train a PyTorch stereo disparity model on FoundationStereo with `uv` and track r
 - Training at `320x240` by default.
 - MLflow logging for params, per-epoch metrics, and checkpoints.
 - Optional asymmetric augmentations for left/right views:
-  - independent brightness, contrast, hue, and additive Gaussian noise.
+  - independent brightness, contrast, hue, Gaussian blur, and additive Gaussian noise.
 
 ## Quick Start
 
@@ -50,6 +50,9 @@ Augmentation knobs (applied independently to left/right when `--augment` is set)
 --brightness-jitter 0.25
 --contrast-jitter 0.25
 --hue-jitter 0.05
+--blur-prob 0.3
+--blur-sigma-max 1.2
+--blur-kernel-size 5
 --noise-std-max 0.03
 ```
 

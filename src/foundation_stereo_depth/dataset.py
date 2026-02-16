@@ -68,6 +68,9 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
         contrast_jitter: float = 0.0,
         hue_jitter: float = 0.0,
         noise_std_max: float = 0.0,
+        blur_prob: float = 0.0,
+        blur_sigma_max: float = 0.0,
+        blur_kernel_size: int = 5,
     ) -> None:
         self.samples = list(samples)
         self.image_size = image_size
@@ -76,6 +79,14 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
         self.contrast_jitter = contrast_jitter
         self.hue_jitter = hue_jitter
         self.noise_std_max = noise_std_max
+        self.blur_prob = blur_prob
+        self.blur_sigma_max = blur_sigma_max
+        self.blur_kernel_size = blur_kernel_size
+
+        if not 0.0 <= self.blur_prob <= 1.0:
+            raise ValueError(f"blur_prob must be in [0, 1], got {self.blur_prob}")
+        if self.blur_kernel_size < 3 or self.blur_kernel_size % 2 == 0:
+            raise ValueError(f"blur_kernel_size must be odd and >= 3, got {self.blur_kernel_size}")
         if len(self.samples) == 0:
             raise ValueError("No samples were provided.")
 
@@ -129,10 +140,27 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
             return 0.0
         return float(torch.empty(1).uniform_(0.0, self.noise_std_max).item())
 
+    def _should_apply_blur(self) -> bool:
+        if self.blur_prob <= 0.0 or self.blur_sigma_max <= 0.0:
+            return False
+        return bool(torch.rand(1).item() < self.blur_prob)
+
+    def _sample_blur_sigma(self) -> float:
+        sigma_min = 0.1
+        sigma_max = max(self.blur_sigma_max, sigma_min)
+        return float(torch.empty(1).uniform_(sigma_min, sigma_max).item())
+
     def _augment_rgb(self, image: torch.Tensor) -> torch.Tensor:
         image = TF.adjust_brightness(image, self._sample_jitter_factor(self.brightness_jitter))
         image = TF.adjust_contrast(image, self._sample_jitter_factor(self.contrast_jitter))
         image = TF.adjust_hue(image, self._sample_hue_shift())
+        if self._should_apply_blur():
+            sigma = self._sample_blur_sigma()
+            image = TF.gaussian_blur(
+                image,
+                kernel_size=[self.blur_kernel_size, self.blur_kernel_size],
+                sigma=[sigma, sigma],
+            )
         noise_std = self._sample_noise_std()
         if noise_std > 0.0:
             image = image + torch.randn_like(image) * noise_std

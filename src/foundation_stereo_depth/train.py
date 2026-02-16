@@ -87,6 +87,24 @@ def parse_args() -> argparse.Namespace:
         default=0.03,
         help="Max stddev for additive Gaussian noise sampled in [0, x].",
     )
+    parser.add_argument(
+        "--blur-prob",
+        type=float,
+        default=0.0,
+        help="Probability of applying Gaussian blur per image.",
+    )
+    parser.add_argument(
+        "--blur-sigma-max",
+        type=float,
+        default=0.0,
+        help="Max sigma for Gaussian blur (if <= 0, blur is disabled).",
+    )
+    parser.add_argument(
+        "--blur-kernel-size",
+        type=int,
+        default=5,
+        help="Gaussian blur kernel size (odd integer >= 3).",
+    )
     return parser.parse_args()
 
 
@@ -229,6 +247,9 @@ def to_mlflow_params(args: argparse.Namespace, train_samples: int, val_samples: 
         params["contrast_jitter"] = args.contrast_jitter
         params["hue_jitter"] = args.hue_jitter
         params["noise_std_max"] = args.noise_std_max
+        params["blur_prob"] = args.blur_prob
+        params["blur_sigma_max"] = args.blur_sigma_max
+        params["blur_kernel_size"] = args.blur_kernel_size
     if args.max_samples > 0:
         params["max_samples"] = args.max_samples
     return params
@@ -259,6 +280,9 @@ def main() -> None:
         contrast_jitter=args.contrast_jitter,
         hue_jitter=args.hue_jitter,
         noise_std_max=args.noise_std_max,
+        blur_prob=args.blur_prob,
+        blur_sigma_max=args.blur_sigma_max,
+        blur_kernel_size=args.blur_kernel_size,
     )
     val_dataset = FoundationStereoDataset(val_samples, image_size=image_size) if val_samples else None
 
