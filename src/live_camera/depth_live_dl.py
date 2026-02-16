@@ -284,14 +284,15 @@ def estimate_baseline_m(P1: np.ndarray | None, P2: np.ndarray | None, T: np.ndar
     return baseline_m
 
 
-def load_calibration_geometry(calibration_path: Path) -> tuple[float | None, float | None]:
+def load_calibration_geometry(calibration_path: Path) -> tuple[float | None, float | None, int | None]:
     if not calibration_path.exists():
-        return None, None
+        return None, None, None
 
     with np.load(calibration_path) as data:
         P1 = data["P1"] if "P1" in data else None
         P2 = data["P2"] if "P2" in data else None
         T = data["T"] if "T" in data else None
+        image_size = data["image_size"] if "image_size" in data else None
         if P1 is not None:
             focal_px = float(P1[0, 0])
         elif "mtx_l" in data:
@@ -301,9 +302,14 @@ def load_calibration_geometry(calibration_path: Path) -> tuple[float | None, flo
 
         baseline_m = estimate_baseline_m(P1=P1, P2=P2, T=T)
 
+        if image_size is not None:
+            calibration_width_px = int(np.asarray(image_size).reshape(-1)[0])
+        else:
+            calibration_width_px = None
+
     if focal_px is not None and (not np.isfinite(focal_px) or focal_px <= 0.0):
         focal_px = None
-    return focal_px, baseline_m
+    return focal_px, baseline_m, calibration_width_px
 
 
 def disparity_to_depth(disparity: np.ndarray, focal_length_px: float, baseline_m: float) -> np.ndarray:
@@ -328,15 +334,21 @@ def main() -> None:
     checkpoint_mtime_ns = checkpoint_path.stat().st_mtime_ns
     next_poll_time = time.time() + args.checkpoint_poll_sec
 
-    calibration_focal_px, calibration_baseline_m = load_calibration_geometry(args.calibration)
+    calibration_focal_px, calibration_baseline_m, calibration_width_px = load_calibration_geometry(
+        args.calibration
+    )
     rectification = maybe_load_rectification(args.calibration, use_rectification=not args.no_rectify)
     if rectification is not None:
         calibration_focal_px = rectification.focal_length_px
         calibration_baseline_m = rectification.baseline_m
+        calibration_width_px = rectification.image_size[0]
 
-    focal_length_px = calibration_focal_px
+    focal_length_px_calib = calibration_focal_px
     baseline_m = calibration_baseline_m
-    depth_enabled = baseline_m is not None and focal_length_px is not None
+    focal_length_px_model = None
+    if focal_length_px_calib is not None and calibration_width_px is not None and calibration_width_px > 0:
+        focal_length_px_model = focal_length_px_calib * (args.model_width / float(calibration_width_px))
+    depth_enabled = baseline_m is not None and focal_length_px_model is not None
 
     config = CameraConfig(
         width=args.width,
@@ -360,7 +372,12 @@ def main() -> None:
     if loaded_epoch >= 0:
         print(f"Loaded epoch: {loaded_epoch}")
     if depth_enabled:
-        print(f"Depth conversion enabled: baseline={baseline_m:.6f} m, focal={focal_length_px:.2f} px")
+        print(
+            "Depth conversion enabled: "
+            f"baseline={baseline_m:.6f} m, "
+            f"focal_calib={focal_length_px_calib:.2f} px, "
+            f"focal_model={focal_length_px_model:.2f} px"
+        )
         if rectification is None:
             print("Warning: running without rectification. Depth may be inaccurate unless inputs are pre-rectified.")
     print(f"Running live DL depth on device={device}. Press q or Esc to quit.")
@@ -434,7 +451,7 @@ def main() -> None:
         center_disparity = float(np.median(patch)) if patch.size > 0 else float("nan")
 
         if depth_enabled:
-            depth_m = disparity_to_depth(disparity, float(focal_length_px), float(baseline_m))
+            depth_m = disparity_to_depth(disparity, float(focal_length_px_model), float(baseline_m))
             depth_patch = depth_m[y0:y1, x0:x1]
             depth_patch = depth_patch[np.isfinite(depth_patch) & (depth_patch > 0.0)]
             center_depth_m = float(np.median(depth_patch)) if depth_patch.size > 0 else float("nan")

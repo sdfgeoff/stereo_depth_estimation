@@ -96,6 +96,7 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
     def _load_disparity(self, path: Path) -> torch.Tensor:
         disparity_uint8 = np.array(Image.open(path).convert("RGB"), dtype=np.uint8)
         disparity = depth_uint8_decoding(disparity_uint8)
+        original_width = disparity.shape[1]
         tensor = torch.from_numpy(disparity).unsqueeze(0)
         tensor = F.interpolate(
             tensor.unsqueeze(0),
@@ -103,6 +104,12 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
             mode="bilinear",
             align_corners=False,
         ).squeeze(0)
+
+        # Disparity is measured in horizontal pixels, so resizing requires
+        # value scaling by the horizontal resize factor.
+        resized_width = self.image_size[1]
+        width_scale = resized_width / float(original_width)
+        tensor = tensor * width_scale
         return tensor
 
     def _sample_jitter_factor(self, jitter: float) -> float:
