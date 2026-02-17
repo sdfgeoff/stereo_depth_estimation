@@ -19,6 +19,8 @@ from tqdm import tqdm
 from .dataset import FoundationStereoDataset, StereoSample, discover_samples
 from .model import StereoUNet
 
+MLFLOW_TRAIN_LOG_EVERY_BATCHES = 10
+
 
 @dataclass
 class TrainConfig:
@@ -213,7 +215,9 @@ def run_epoch(
     loader: DataLoader[dict[str, torch.Tensor]],
     device: torch.device,
     optimizer: AdamW | None = None,
-) -> dict[str, float]:
+    global_step: int = 0,
+    log_every_batches: int | None = None,
+) -> tuple[dict[str, float], int]:
     is_training = optimizer is not None
     model.train(is_training)
 
@@ -223,8 +227,17 @@ def run_epoch(
     total_sigma = 0.0
     total_valid_pixels = 0
 
+    interval_nll = 0.0
+    interval_abs_error = 0.0
+    interval_sq_error = 0.0
+    interval_sigma = 0.0
+    interval_valid_pixels = 0
+
     progress = tqdm(loader, leave=False)
     for batch in progress:
+        if is_training:
+            global_step += 1
+
         inputs = batch["input"].to(device, non_blocking=True)
         targets = batch["target"].to(device, non_blocking=True)
         valid_mask = batch["valid_mask"].to(device, non_blocking=True)
@@ -258,6 +271,11 @@ def run_epoch(
         total_abs_error += float(diff_detached.abs().sum().item())
         total_sq_error += float(diff_detached.pow(2).sum().item())
         total_sigma += float(sigma_detached.sum().item())
+        interval_nll += float(nll_detached.sum().item())
+        interval_abs_error += float(diff_detached.abs().sum().item())
+        interval_sq_error += float(diff_detached.pow(2).sum().item())
+        interval_sigma += float(sigma_detached.sum().item())
+        interval_valid_pixels += valid_count
         progress.set_postfix(
             {
                 "mae": f"{diff_detached.abs().mean().item():.4f}",
@@ -265,20 +283,60 @@ def run_epoch(
             }
         )
 
+        if (
+            is_training
+            and log_every_batches is not None
+            and log_every_batches > 0
+            and global_step % log_every_batches == 0
+            and interval_valid_pixels > 0
+        ):
+            mlflow.log_metrics(
+                {
+                    "train_loss_step": interval_nll / interval_valid_pixels,
+                    "train_nll_step": interval_nll / interval_valid_pixels,
+                    "train_mae_step": interval_abs_error / interval_valid_pixels,
+                    "train_rmse_step": math.sqrt(
+                        interval_sq_error / interval_valid_pixels
+                    ),
+                    "train_sigma_step": interval_sigma / interval_valid_pixels,
+                },
+                step=global_step,
+            )
+            interval_nll = 0.0
+            interval_abs_error = 0.0
+            interval_sq_error = 0.0
+            interval_sigma = 0.0
+            interval_valid_pixels = 0
+
     if total_valid_pixels == 0:
         raise RuntimeError("No valid target pixels found for this epoch.")
+
+    if is_training and interval_valid_pixels > 0:
+        mlflow.log_metrics(
+            {
+                "train_loss_step": interval_nll / interval_valid_pixels,
+                "train_nll_step": interval_nll / interval_valid_pixels,
+                "train_mae_step": interval_abs_error / interval_valid_pixels,
+                "train_rmse_step": math.sqrt(interval_sq_error / interval_valid_pixels),
+                "train_sigma_step": interval_sigma / interval_valid_pixels,
+            },
+            step=global_step,
+        )
 
     nll_mean = total_nll / total_valid_pixels
     mae = total_abs_error / total_valid_pixels
     rmse = math.sqrt(total_sq_error / total_valid_pixels)
     sigma_mean = total_sigma / total_valid_pixels
-    return {
-        "loss": nll_mean,
-        "nll": nll_mean,
-        "mae": mae,
-        "rmse": rmse,
-        "sigma": sigma_mean,
-    }
+    return (
+        {
+            "loss": nll_mean,
+            "nll": nll_mean,
+            "mae": mae,
+            "rmse": rmse,
+            "sigma": sigma_mean,
+        },
+        global_step,
+    )
 
 
 def save_checkpoint(
@@ -319,6 +377,7 @@ def to_mlflow_params(
         "augment": args.augment,
         "uncertainty_head": True,
         "loss": "heteroscedastic_l1_nll",
+        "mlflow_train_log_every_batches": MLFLOW_TRAIN_LOG_EVERY_BATCHES,
     }
     if args.augment:
         params["brightness_jitter"] = args.brightness_jitter
@@ -429,12 +488,20 @@ def main() -> None:
         best_epoch = -1
         best_checkpoint = checkpoints_dir / "best.pt"
         last_checkpoint = checkpoints_dir / "last.pt"
+        global_step = 0
 
         for epoch in range(1, args.epochs + 1):
             start_time = time.time()
-            train_metrics = run_epoch(model, train_loader, device, optimizer=optimizer)
+            train_metrics, global_step = run_epoch(
+                model,
+                train_loader,
+                device,
+                optimizer=optimizer,
+                global_step=global_step,
+                log_every_batches=MLFLOW_TRAIN_LOG_EVERY_BATCHES,
+            )
             if val_loader is not None:
-                val_metrics = run_epoch(model, val_loader, device, optimizer=None)
+                val_metrics, _ = run_epoch(model, val_loader, device, optimizer=None)
             else:
                 val_metrics = train_metrics
 
