@@ -5,6 +5,7 @@ import json
 import math
 import random
 import time
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -19,12 +20,42 @@ from .dataset import FoundationStereoDataset, StereoSample, discover_samples
 from .model import StereoUNet
 
 
-def parse_args() -> argparse.Namespace:
+@dataclass
+class TrainConfig:
+    dataset_root: str
+    height: int
+    width: int
+    epochs: int
+    batch_size: int
+    lr: float
+    weight_decay: float
+    num_workers: int
+    val_fraction: float
+    max_samples: int
+    seed: int
+    device: str
+    mlflow_tracking_uri: str
+    mlflow_experiment: str
+    run_name: str | None
+    output_dir: str
+    cache_root: str | None
+    require_cache: bool
+    augment: bool
+    brightness_jitter: float
+    contrast_jitter: float
+    hue_jitter: float
+    noise_std_max: float
+    blur_prob: float
+    blur_sigma_max: float
+    blur_kernel_size: int
+
+
+def parse_args() -> TrainConfig:
     parser = argparse.ArgumentParser(description="Train stereo disparity model on FoundationStereo.")
     parser.add_argument(
         "--dataset-root",
         type=str,
-        default="/home/geoffrey/Reference/OffTopic/Datasets/FoundationStereo",
+        default="/mnt/bulk2/NVidia Foundation Stereo",
         help="Path to FoundationStereo dataset root.",
     )
     parser.add_argument("--height", type=int, default=240, help="Training image height.")
@@ -71,7 +102,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--augment",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Enable asymmetric RGB augmentations independently on left/right images.",
     )
     parser.add_argument(
@@ -116,7 +148,8 @@ def parse_args() -> argparse.Namespace:
         default=5,
         help="Gaussian blur kernel size (odd integer >= 3).",
     )
-    return parser.parse_args()
+    namespace = parser.parse_args()
+    return TrainConfig(**vars(namespace))
 
 
 def set_seed(seed: int) -> None:
@@ -221,20 +254,20 @@ def save_checkpoint(
     epoch: int,
     model: StereoUNet,
     optimizer: AdamW,
-    args: argparse.Namespace,
+    args: TrainConfig,
     metrics: dict[str, float],
 ) -> None:
     checkpoint = {
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
-        "args": vars(args),
+        "args": asdict(args),
         "metrics": metrics,
     }
     torch.save(checkpoint, checkpoint_path)
 
 
-def to_mlflow_params(args: argparse.Namespace, train_samples: int, val_samples: int, model: StereoUNet) -> dict[str, Any]:
+def to_mlflow_params(args: TrainConfig, train_samples: int, val_samples: int, model: StereoUNet) -> dict[str, Any]:
     params: dict[str, Any] = {
         "dataset_root": str(Path(args.dataset_root).expanduser()),
         "height": args.height,
@@ -347,7 +380,7 @@ def main() -> None:
         checkpoints_dir = output_dir / "checkpoints"
         checkpoints_dir.mkdir(parents=True, exist_ok=True)
         config_path = output_dir / "config.json"
-        config_path.write_text(json.dumps(vars(args), indent=2), encoding="utf-8")
+        config_path.write_text(json.dumps(asdict(args), indent=2), encoding="utf-8")
 
         mlflow.log_params(to_mlflow_params(args, len(train_samples), len(val_samples), model))
         mlflow.log_artifact(str(config_path), artifact_path="config")
