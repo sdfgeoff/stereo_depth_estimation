@@ -51,22 +51,34 @@ class TrainConfig:
 
 
 def parse_args() -> TrainConfig:
-    parser = argparse.ArgumentParser(description="Train stereo disparity model on FoundationStereo.")
+    parser = argparse.ArgumentParser(
+        description="Train stereo disparity model on FoundationStereo."
+    )
     parser.add_argument(
         "--dataset-root",
         type=str,
         default="/mnt/bulk2/NVidia Foundation Stereo",
         help="Path to FoundationStereo dataset root.",
     )
-    parser.add_argument("--height", type=int, default=240, help="Training image height.")
+    parser.add_argument(
+        "--height", type=int, default=240, help="Training image height."
+    )
     parser.add_argument("--width", type=int, default=320, help="Training image width.")
     parser.add_argument("--epochs", type=int, default=10, help="Number of epochs.")
     parser.add_argument("--batch-size", type=int, default=8, help="Batch size.")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
-    parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay.")
-    parser.add_argument("--num-workers", type=int, default=4, help="DataLoader workers.")
-    parser.add_argument("--val-fraction", type=float, default=0.1, help="Validation fraction in [0, 1).")
-    parser.add_argument("--max-samples", type=int, default=0, help="Optional cap on number of samples.")
+    parser.add_argument(
+        "--weight-decay", type=float, default=1e-4, help="Weight decay."
+    )
+    parser.add_argument(
+        "--num-workers", type=int, default=4, help="DataLoader workers."
+    )
+    parser.add_argument(
+        "--val-fraction", type=float, default=0.1, help="Validation fraction in [0, 1)."
+    )
+    parser.add_argument(
+        "--max-samples", type=int, default=0, help="Optional cap on number of samples."
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument(
         "--device",
@@ -86,8 +98,15 @@ def parse_args() -> TrainConfig:
         default="foundation-stereo-depth",
         help="MLflow experiment name.",
     )
-    parser.add_argument("--run-name", type=str, default=None, help="Optional MLflow run name.")
-    parser.add_argument("--output-dir", type=str, default="./outputs", help="Directory for checkpoints/config.")
+    parser.add_argument(
+        "--run-name", type=str, default=None, help="Optional MLflow run name."
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="./outputs",
+        help="Directory for checkpoints/config.",
+    )
     parser.add_argument(
         "--cache-root",
         type=str,
@@ -166,7 +185,9 @@ def resolve_device(device_arg: str) -> torch.device:
     return torch.device(device_arg)
 
 
-def split_samples(samples: list[StereoSample], val_fraction: float, seed: int) -> tuple[list[StereoSample], list[StereoSample]]:
+def split_samples(
+    samples: list[StereoSample], val_fraction: float, seed: int
+) -> tuple[list[StereoSample], list[StereoSample]]:
     if not 0.0 <= val_fraction < 1.0:
         raise ValueError(f"--val-fraction must be in [0, 1), got: {val_fraction}")
 
@@ -237,7 +258,12 @@ def run_epoch(
         total_abs_error += float(diff_detached.abs().sum().item())
         total_sq_error += float(diff_detached.pow(2).sum().item())
         total_sigma += float(sigma_detached.sum().item())
-        progress.set_postfix({"mae": f"{diff_detached.abs().mean().item():.4f}", "nll": f"{nll_detached.mean().item():.4f}"})
+        progress.set_postfix(
+            {
+                "mae": f"{diff_detached.abs().mean().item():.4f}",
+                "nll": f"{nll_detached.mean().item():.4f}",
+            }
+        )
 
     if total_valid_pixels == 0:
         raise RuntimeError("No valid target pixels found for this epoch.")
@@ -246,7 +272,13 @@ def run_epoch(
     mae = total_abs_error / total_valid_pixels
     rmse = math.sqrt(total_sq_error / total_valid_pixels)
     sigma_mean = total_sigma / total_valid_pixels
-    return {"loss": nll_mean, "nll": nll_mean, "mae": mae, "rmse": rmse, "sigma": sigma_mean}
+    return {
+        "loss": nll_mean,
+        "nll": nll_mean,
+        "mae": mae,
+        "rmse": rmse,
+        "sigma": sigma_mean,
+    }
 
 
 def save_checkpoint(
@@ -267,7 +299,9 @@ def save_checkpoint(
     torch.save(checkpoint, checkpoint_path)
 
 
-def to_mlflow_params(args: TrainConfig, train_samples: int, val_samples: int, model: StereoUNet) -> dict[str, Any]:
+def to_mlflow_params(
+    args: TrainConfig, train_samples: int, val_samples: int, model: StereoUNet
+) -> dict[str, Any]:
     params: dict[str, Any] = {
         "dataset_root": str(Path(args.dataset_root).expanduser()),
         "height": args.height,
@@ -315,8 +349,12 @@ def main() -> None:
     if len(all_samples) < 2:
         raise ValueError("Need at least two samples to create train/validation splits.")
 
-    train_samples, val_samples = split_samples(all_samples, args.val_fraction, args.seed)
-    print(f"Discovered {len(all_samples)} samples: train={len(train_samples)}, val={len(val_samples)}")
+    train_samples, val_samples = split_samples(
+        all_samples, args.val_fraction, args.seed
+    )
+    print(
+        f"Discovered {len(all_samples)} samples: train={len(train_samples)}, val={len(val_samples)}"
+    )
 
     image_size = (args.height, args.width)
     train_dataset = FoundationStereoDataset(
@@ -382,7 +420,9 @@ def main() -> None:
         config_path = output_dir / "config.json"
         config_path.write_text(json.dumps(asdict(args), indent=2), encoding="utf-8")
 
-        mlflow.log_params(to_mlflow_params(args, len(train_samples), len(val_samples), model))
+        mlflow.log_params(
+            to_mlflow_params(args, len(train_samples), len(val_samples), model)
+        )
         mlflow.log_artifact(str(config_path), artifact_path="config")
 
         best_val_mae = float("inf")
@@ -414,12 +454,16 @@ def main() -> None:
                 epoch_metrics["val_sigma"] = val_metrics["sigma"]
             mlflow.log_metrics(epoch_metrics, step=epoch)
 
-            save_checkpoint(last_checkpoint, epoch, model, optimizer, args, epoch_metrics)
+            save_checkpoint(
+                last_checkpoint, epoch, model, optimizer, args, epoch_metrics
+            )
             candidate_metric = val_metrics["mae"]
             if candidate_metric < best_val_mae:
                 best_val_mae = candidate_metric
                 best_epoch = epoch
-                save_checkpoint(best_checkpoint, epoch, model, optimizer, args, epoch_metrics)
+                save_checkpoint(
+                    best_checkpoint, epoch, model, optimizer, args, epoch_metrics
+                )
 
             if val_loader is not None:
                 print(

@@ -25,13 +25,27 @@ def parse_args() -> argparse.Namespace:
         default="/home/geoffrey/Reference/OffTopic/Datasets/FoundationStereo",
         help="Path to FoundationStereo dataset root.",
     )
-    parser.add_argument("--height", type=int, default=240, help="Evaluation image height.")
-    parser.add_argument("--width", type=int, default=320, help="Evaluation image width.")
-    parser.add_argument("--batch-size", type=int, default=2, help="Batch size for probe evaluation.")
-    parser.add_argument("--num-workers", type=int, default=0, help="DataLoader workers.")
-    parser.add_argument("--val-fraction", type=float, default=0.1, help="Validation fraction in [0, 1).")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed used for sample split.")
-    parser.add_argument("--num-samples", type=int, default=8, help="Probe sample count.")
+    parser.add_argument(
+        "--height", type=int, default=240, help="Evaluation image height."
+    )
+    parser.add_argument(
+        "--width", type=int, default=320, help="Evaluation image width."
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=2, help="Batch size for probe evaluation."
+    )
+    parser.add_argument(
+        "--num-workers", type=int, default=0, help="DataLoader workers."
+    )
+    parser.add_argument(
+        "--val-fraction", type=float, default=0.1, help="Validation fraction in [0, 1)."
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42, help="Random seed used for sample split."
+    )
+    parser.add_argument(
+        "--num-samples", type=int, default=8, help="Probe sample count."
+    )
     parser.add_argument(
         "--split",
         type=str,
@@ -45,7 +59,12 @@ def parse_args() -> argparse.Namespace:
         default="./outputs",
         help="Training output dir that contains <run_id>/checkpoints/.",
     )
-    parser.add_argument("--run-id", type=str, default=None, help="MLflow run id/output dir name to monitor.")
+    parser.add_argument(
+        "--run-id",
+        type=str,
+        default=None,
+        help="MLflow run id/output dir name to monitor.",
+    )
     parser.add_argument(
         "--checkpoint-name",
         type=str,
@@ -63,15 +82,29 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Write left/right/target/pred preview mosaics for probe samples.",
     )
-    parser.add_argument("--device", type=str, default="cpu", help='Device for monitor process, default "cpu".')
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help='Device for monitor process, default "cpu".',
+    )
     parser.add_argument(
         "--cpu-threads",
         type=int,
         default=4,
         help="Torch CPU thread count for monitor process.",
     )
-    parser.add_argument("--watch", action="store_true", help="Watch for checkpoint updates and re-run evaluation.")
-    parser.add_argument("--interval-sec", type=float, default=20.0, help="Polling interval in watch mode.")
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Watch for checkpoint updates and re-run evaluation.",
+    )
+    parser.add_argument(
+        "--interval-sec",
+        type=float,
+        default=20.0,
+        help="Polling interval in watch mode.",
+    )
     parser.add_argument(
         "--max-iterations",
         type=int,
@@ -81,7 +114,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def split_samples(samples: list[StereoSample], val_fraction: float, seed: int) -> tuple[list[StereoSample], list[StereoSample]]:
+def split_samples(
+    samples: list[StereoSample], val_fraction: float, seed: int
+) -> tuple[list[StereoSample], list[StereoSample]]:
     if not 0.0 <= val_fraction < 1.0:
         raise ValueError(f"--val-fraction must be in [0, 1), got {val_fraction}")
     shuffled = list(samples)
@@ -163,7 +198,9 @@ def evaluate_checkpoint(
     checkpoint = torch.load(checkpoint_path, map_location=device)
 
     model = StereoUNet(in_channels=6, out_channels=1).to(device)
-    missing_keys, unexpected_keys = load_state_dict_compat(model, checkpoint["model_state_dict"])
+    missing_keys, unexpected_keys = load_state_dict_compat(
+        model, checkpoint["model_state_dict"]
+    )
     if missing_keys or unexpected_keys:
         print(
             "Checkpoint compatibility load: "
@@ -171,7 +208,9 @@ def evaluate_checkpoint(
         )
     model.eval()
 
-    dataset = FoundationStereoDataset(probe_samples, image_size=image_size, augment=False)
+    dataset = FoundationStereoDataset(
+        probe_samples, image_size=image_size, augment=False
+    )
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -206,8 +245,15 @@ def evaluate_checkpoint(
                 for inner_index in range(inputs.shape[0]):
                     if preview_written >= 8:
                         break
-                    save_path = previews_dir / f"sample_{batch_index:03d}_{inner_index:02d}.png"
-                    save_preview(save_path, inputs[inner_index], targets[inner_index], preds[inner_index])
+                    save_path = (
+                        previews_dir / f"sample_{batch_index:03d}_{inner_index:02d}.png"
+                    )
+                    save_preview(
+                        save_path,
+                        inputs[inner_index],
+                        targets[inner_index],
+                        preds[inner_index],
+                    )
                     preview_written += 1
 
     if total_count == 0:
@@ -224,7 +270,9 @@ def choose_probe_samples(args: argparse.Namespace) -> list[StereoSample]:
     if len(all_samples) == 0:
         raise ValueError("No samples found in dataset root.")
 
-    train_samples, val_samples = split_samples(all_samples, args.val_fraction, args.seed)
+    train_samples, val_samples = split_samples(
+        all_samples, args.val_fraction, args.seed
+    )
     if args.split == "train":
         pool = train_samples
     elif args.split == "val":
@@ -270,7 +318,9 @@ def main() -> None:
     iterations = 0
     while True:
         if not checkpoint_path.exists():
-            print(f"[{time.strftime('%H:%M:%S')}] Waiting for checkpoint: {checkpoint_path}")
+            print(
+                f"[{time.strftime('%H:%M:%S')}] Waiting for checkpoint: {checkpoint_path}"
+            )
         else:
             mtime_ns = checkpoint_path.stat().st_mtime_ns
             if mtime_ns != previous_mtime_ns:
@@ -289,7 +339,9 @@ def main() -> None:
 
                     metrics["timestamp"] = time.time()
                     metrics_path = monitor_run_dir / "latest_metrics.json"
-                    metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+                    metrics_path.write_text(
+                        json.dumps(metrics, indent=2), encoding="utf-8"
+                    )
 
                     history_path = monitor_run_dir / "history.jsonl"
                     with history_path.open("a", encoding="utf-8") as handle:
@@ -301,7 +353,9 @@ def main() -> None:
                     )
                 except Exception as exc:
                     # Checkpoint file may be mid-write; try again on next poll.
-                    print(f"[{time.strftime('%H:%M:%S')}] Monitor skipped update: {exc}")
+                    print(
+                        f"[{time.strftime('%H:%M:%S')}] Monitor skipped update: {exc}"
+                    )
             else:
                 print(f"[{time.strftime('%H:%M:%S')}] No checkpoint update.")
 

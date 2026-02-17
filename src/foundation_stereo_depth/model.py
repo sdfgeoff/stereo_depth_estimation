@@ -11,7 +11,10 @@ def load_state_dict_compat(
     mapped_state = dict(state_dict)
 
     # Backward compatibility with older single-head checkpoints.
-    if "output_head.weight" in mapped_state and "disparity_head.weight" not in mapped_state:
+    if (
+        "output_head.weight" in mapped_state
+        and "disparity_head.weight" not in mapped_state
+    ):
         mapped_state["disparity_head.weight"] = mapped_state.pop("output_head.weight")
     if "output_head.bias" in mapped_state and "disparity_head.bias" not in mapped_state:
         mapped_state["disparity_head.bias"] = mapped_state.pop("output_head.bias")
@@ -43,7 +46,9 @@ class ConvBlock(nn.Module):
 
 
 class StereoUNet(nn.Module):
-    def __init__(self, in_channels: int = 6, out_channels: int = 1, base_channels: int = 32) -> None:
+    def __init__(
+        self, in_channels: int = 6, out_channels: int = 1, base_channels: int = 32
+    ) -> None:
         super().__init__()
         c1 = base_channels
         c2 = c1 * 2

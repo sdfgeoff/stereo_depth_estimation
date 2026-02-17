@@ -8,7 +8,13 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
-from camera_setup import CameraConfig, drop_frames, log_camera_info, open_camera, warmup_cameras
+from camera_setup import (
+    CameraConfig,
+    drop_frames,
+    log_camera_info,
+    open_camera,
+    warmup_cameras,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -98,7 +104,9 @@ def parse_args() -> argparse.Namespace:
         default="cpu",
         help='Inference device: "cpu", "cuda", or explicit torch device string.',
     )
-    parser.add_argument("--cpu-threads", type=int, default=4, help="Torch CPU thread count.")
+    parser.add_argument(
+        "--cpu-threads", type=int, default=4, help="Torch CPU thread count."
+    )
     parser.add_argument(
         "--model-width",
         type=int,
@@ -131,8 +139,12 @@ def parse_args() -> argparse.Namespace:
         default="MJPG",
         help="Requested pixel format (for example: MJPG, YUYV).",
     )
-    parser.add_argument("--buffer-size", type=int, default=1, help="Capture queue size.")
-    parser.add_argument("--warmup-frames", type=int, default=20, help="Initial frames to discard.")
+    parser.add_argument(
+        "--buffer-size", type=int, default=1, help="Capture queue size."
+    )
+    parser.add_argument(
+        "--warmup-frames", type=int, default=20, help="Initial frames to discard."
+    )
     parser.add_argument(
         "--drop-frames",
         type=int,
@@ -189,7 +201,9 @@ def resolve_checkpoint_path(args: argparse.Namespace) -> Path:
     return max(candidates, key=lambda path: path.stat().st_mtime_ns)
 
 
-def load_checkpoint(model: StereoUNet, checkpoint_path: Path, device: torch.device) -> tuple[int, bool]:
+def load_checkpoint(
+    model: StereoUNet, checkpoint_path: Path, device: torch.device
+) -> tuple[int, bool]:
     checkpoint = torch.load(checkpoint_path, map_location=device)
     if not isinstance(checkpoint, dict):
         raise ValueError(f"Unexpected checkpoint format in {checkpoint_path}.")
@@ -201,7 +215,9 @@ def load_checkpoint(model: StereoUNet, checkpoint_path: Path, device: torch.devi
         state_dict = checkpoint
         epoch = -1
 
-    has_uncertainty_head = "logvar_head.weight" in state_dict and "logvar_head.bias" in state_dict
+    has_uncertainty_head = (
+        "logvar_head.weight" in state_dict and "logvar_head.bias" in state_dict
+    )
     missing_keys, unexpected_keys = load_state_dict_compat(model, state_dict)
     if missing_keys or unexpected_keys:
         print(
@@ -253,7 +269,9 @@ def depth_contour_mask(
 
     clipped_depth = np.clip(depth_m, min_depth_m, max_depth_m)
     bins = np.full(depth_m.shape, -1, dtype=np.int32)
-    bins[valid] = np.floor((clipped_depth[valid] - min_depth_m) / contour_step_m).astype(np.int32)
+    bins[valid] = np.floor(
+        (clipped_depth[valid] - min_depth_m) / contour_step_m
+    ).astype(np.int32)
 
     edges = np.zeros(depth_m.shape, dtype=bool)
     vertical_valid = valid[:-1, :] & valid[1:, :]
@@ -305,7 +323,9 @@ def maybe_load_rectification(
     )
 
 
-def estimate_baseline_m(P1: np.ndarray | None, P2: np.ndarray | None, T: np.ndarray | None) -> float | None:
+def estimate_baseline_m(
+    P1: np.ndarray | None, P2: np.ndarray | None, T: np.ndarray | None
+) -> float | None:
     baseline_m = None
     if P1 is not None and P2 is not None:
         focal_px = float(P1[0, 0])
@@ -323,7 +343,9 @@ def estimate_baseline_m(P1: np.ndarray | None, P2: np.ndarray | None, T: np.ndar
     return baseline_m
 
 
-def load_calibration_geometry(calibration_path: Path) -> tuple[float | None, float | None, int | None]:
+def load_calibration_geometry(
+    calibration_path: Path,
+) -> tuple[float | None, float | None, int | None]:
     if not calibration_path.exists():
         return None, None, None
 
@@ -351,7 +373,9 @@ def load_calibration_geometry(calibration_path: Path) -> tuple[float | None, flo
     return focal_px, baseline_m, calibration_width_px
 
 
-def disparity_to_depth(disparity: np.ndarray, focal_length_px: float, baseline_m: float) -> np.ndarray:
+def disparity_to_depth(
+    disparity: np.ndarray, focal_length_px: float, baseline_m: float
+) -> np.ndarray:
     depth = np.full_like(disparity, np.nan, dtype=np.float32)
     valid = np.isfinite(disparity) & (disparity > 1e-6)
     depth[valid] = (focal_length_px * baseline_m) / disparity[valid]
@@ -373,14 +397,18 @@ def main() -> None:
     checkpoint_path = resolve_checkpoint_path(args)
 
     model = StereoUNet(in_channels=6, out_channels=1).to(device)
-    loaded_epoch, uncertainty_available = load_checkpoint(model, checkpoint_path, device)
+    loaded_epoch, uncertainty_available = load_checkpoint(
+        model, checkpoint_path, device
+    )
     checkpoint_mtime_ns = checkpoint_path.stat().st_mtime_ns
     next_poll_time = time.time() + args.checkpoint_poll_sec
 
-    calibration_focal_px, calibration_baseline_m, calibration_width_px = load_calibration_geometry(
-        args.calibration
+    calibration_focal_px, calibration_baseline_m, calibration_width_px = (
+        load_calibration_geometry(args.calibration)
     )
-    rectification = maybe_load_rectification(args.calibration, use_rectification=not args.no_rectify)
+    rectification = maybe_load_rectification(
+        args.calibration, use_rectification=not args.no_rectify
+    )
     if rectification is not None:
         calibration_focal_px = rectification.focal_length_px
         calibration_baseline_m = rectification.baseline_m
@@ -389,8 +417,14 @@ def main() -> None:
     focal_length_px_calib = calibration_focal_px
     baseline_m = calibration_baseline_m
     focal_length_px_model = None
-    if focal_length_px_calib is not None and calibration_width_px is not None and calibration_width_px > 0:
-        focal_length_px_model = focal_length_px_calib * (args.model_width / float(calibration_width_px))
+    if (
+        focal_length_px_calib is not None
+        and calibration_width_px is not None
+        and calibration_width_px > 0
+    ):
+        focal_length_px_model = focal_length_px_calib * (
+            args.model_width / float(calibration_width_px)
+        )
     depth_enabled = baseline_m is not None and focal_length_px_model is not None
 
     config = CameraConfig(
@@ -417,7 +451,9 @@ def main() -> None:
     if uncertainty_available:
         print("Confidence visualization enabled from checkpoint uncertainty head.")
     else:
-        print("Checkpoint does not include trained uncertainty head; confidence map disabled.")
+        print(
+            "Checkpoint does not include trained uncertainty head; confidence map disabled."
+        )
     if depth_enabled:
         print(
             "Depth conversion enabled: "
@@ -426,7 +462,9 @@ def main() -> None:
             f"focal_model={focal_length_px_model:.2f} px"
         )
         if rectification is None:
-            print("Warning: running without rectification. Depth may be inaccurate unless inputs are pre-rectified.")
+            print(
+                "Warning: running without rectification. Depth may be inaccurate unless inputs are pre-rectified."
+            )
     print(f"Running live DL depth on device={device}. Press q or Esc to quit.")
 
     smoothed = None
@@ -463,31 +501,45 @@ def main() -> None:
             new_mtime_ns = checkpoint_path.stat().st_mtime_ns
             if new_mtime_ns != checkpoint_mtime_ns:
                 try:
-                    loaded_epoch, uncertainty_available = load_checkpoint(model, checkpoint_path, device)
+                    loaded_epoch, uncertainty_available = load_checkpoint(
+                        model, checkpoint_path, device
+                    )
                     checkpoint_mtime_ns = new_mtime_ns
                     print(f"Reloaded checkpoint at epoch {loaded_epoch}.")
                     if uncertainty_available:
-                        print("Confidence visualization enabled from reloaded checkpoint.")
+                        print(
+                            "Confidence visualization enabled from reloaded checkpoint."
+                        )
                     else:
-                        print("Reloaded checkpoint has no uncertainty head; confidence map disabled.")
+                        print(
+                            "Reloaded checkpoint has no uncertainty head; confidence map disabled."
+                        )
                 except Exception as exc:
                     print(f"Checkpoint reload skipped: {exc}")
             next_poll_time = time.time() + args.checkpoint_poll_sec
 
         left_tensor = preprocess_rgb(view_l, model_size)
         right_tensor = preprocess_rgb(view_r, model_size)
-        model_input = torch.cat([left_tensor, right_tensor], dim=0).unsqueeze(0).to(device)
+        model_input = (
+            torch.cat([left_tensor, right_tensor], dim=0).unsqueeze(0).to(device)
+        )
 
         with torch.inference_mode():
-            disparity_tensor, logvar_tensor = model(model_input, return_uncertainty=True)
-            prediction = disparity_tensor[0, 0].detach().cpu().numpy().astype(np.float32)
+            disparity_tensor, logvar_tensor = model(
+                model_input, return_uncertainty=True
+            )
+            prediction = (
+                disparity_tensor[0, 0].detach().cpu().numpy().astype(np.float32)
+            )
             logvar = logvar_tensor[0, 0].detach().cpu().numpy().astype(np.float32)
 
         if args.ema_alpha > 0.0:
             if smoothed is None:
                 smoothed = prediction
             else:
-                smoothed = args.ema_alpha * prediction + (1.0 - args.ema_alpha) * smoothed
+                smoothed = (
+                    args.ema_alpha * prediction + (1.0 - args.ema_alpha) * smoothed
+                )
             disparity = smoothed
         else:
             disparity = prediction
@@ -504,10 +556,14 @@ def main() -> None:
         center_disparity = float(np.median(patch)) if patch.size > 0 else float("nan")
 
         if depth_enabled:
-            depth_m = disparity_to_depth(disparity, float(focal_length_px_model), float(baseline_m))
+            depth_m = disparity_to_depth(
+                disparity, float(focal_length_px_model), float(baseline_m)
+            )
             depth_patch = depth_m[y0:y1, x0:x1]
             depth_patch = depth_patch[np.isfinite(depth_patch) & (depth_patch > 0.0)]
-            center_depth_m = float(np.median(depth_patch)) if depth_patch.size > 0 else float("nan")
+            center_depth_m = (
+                float(np.median(depth_patch)) if depth_patch.size > 0 else float("nan")
+            )
             contour_mask = depth_contour_mask(
                 depth_m,
                 contour_step_m=DEPTH_CONTOUR_STEP_M,
@@ -515,7 +571,9 @@ def main() -> None:
                 max_depth_m=DEPTH_VIS_RANGE_M[1],
             )
             contour_mask = cv2.resize(
-                contour_mask, (view_l.shape[1], view_l.shape[0]), interpolation=cv2.INTER_NEAREST
+                contour_mask,
+                (view_l.shape[1], view_l.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
             )
             left_view_with_contours = view_l.copy()
             left_view_with_contours[contour_mask > 0] = DEPTH_CONTOUR_COLOR_BGR
@@ -531,11 +589,19 @@ def main() -> None:
         if uncertainty_available:
             confidence_map = confidence_from_logvar(logvar)
             confidence_patch = confidence_map[y0:y1, x0:x1]
-            confidence_patch = confidence_patch[np.isfinite(confidence_patch) & (confidence_patch > 0.0)]
-            center_confidence = float(np.median(confidence_patch)) if confidence_patch.size > 0 else float("nan")
+            confidence_patch = confidence_patch[
+                np.isfinite(confidence_patch) & (confidence_patch > 0.0)
+            ]
+            center_confidence = (
+                float(np.median(confidence_patch))
+                if confidence_patch.size > 0
+                else float("nan")
+            )
             confidence_vis = colorize_scalar_map(confidence_map, CONFIDENCE_COLORMAP)
             confidence_vis = cv2.resize(
-                confidence_vis, (view_l.shape[1], view_l.shape[0]), interpolation=cv2.INTER_LINEAR
+                confidence_vis,
+                (view_l.shape[1], view_l.shape[0]),
+                interpolation=cv2.INTER_LINEAR,
             )
 
         if depth_enabled:
@@ -544,11 +610,17 @@ def main() -> None:
             )
         else:
             depth_vis = colorize_scalar_map(vis_map, COLORMAPS[args.colormap])
-        depth_vis = cv2.resize(depth_vis, (view_l.shape[1], view_l.shape[0]), interpolation=cv2.INTER_LINEAR)
+        depth_vis = cv2.resize(
+            depth_vis,
+            (view_l.shape[1], view_l.shape[0]),
+            interpolation=cv2.INTER_LINEAR,
+        )
 
         marker_x = int(cx * view_l.shape[1] / max(w, 1))
         marker_y = int(cy * view_l.shape[0] / max(h, 1))
-        cv2.drawMarker(depth_vis, (marker_x, marker_y), (255, 255, 255), cv2.MARKER_CROSS, 18, 2)
+        cv2.drawMarker(
+            depth_vis, (marker_x, marker_y), (255, 255, 255), cv2.MARKER_CROSS, 18, 2
+        )
 
         now = time.time()
         fps = 1.0 / max(now - previous_time, 1e-6)
@@ -565,27 +637,80 @@ def main() -> None:
             else:
                 readout_text = f"{readout_text} | center depth: n/a"
         info_text = f"fps: {fps:.1f} | model: {args.model_width}x{args.model_height}"
-        epoch_text = f"checkpoint epoch: {loaded_epoch if loaded_epoch >= 0 else 'unknown'}"
+        epoch_text = (
+            f"checkpoint epoch: {loaded_epoch if loaded_epoch >= 0 else 'unknown'}"
+        )
         if uncertainty_available and np.isfinite(center_confidence):
             info_text = f"{info_text} | conf: {center_confidence:.3f}"
-        cv2.putText(depth_vis, readout_text, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
-        cv2.putText(depth_vis, info_text, (15, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
-        cv2.putText(depth_vis, epoch_text, (15, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+        cv2.putText(
+            depth_vis,
+            readout_text,
+            (15, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.75,
+            (255, 255, 255),
+            2,
+        )
+        cv2.putText(
+            depth_vis,
+            info_text,
+            (15, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (255, 255, 255),
+            2,
+        )
+        cv2.putText(
+            depth_vis,
+            epoch_text,
+            (15, 90),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (255, 255, 255),
+            2,
+        )
         if uncertainty_available:
             confidence_text = (
                 f"center confidence: {center_confidence:.3f}"
                 if np.isfinite(center_confidence)
                 else "center confidence: n/a"
             )
-            cv2.putText(confidence_vis, confidence_text, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
-            cv2.putText(confidence_vis, info_text, (15, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
-            cv2.putText(confidence_vis, epoch_text, (15, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+            cv2.putText(
+                confidence_vis,
+                confidence_text,
+                (15, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.75,
+                (255, 255, 255),
+                2,
+            )
+            cv2.putText(
+                confidence_vis,
+                info_text,
+                (15, 60),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                (255, 255, 255),
+                2,
+            )
+            cv2.putText(
+                confidence_vis,
+                epoch_text,
+                (15, 90),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                (255, 255, 255),
+                2,
+            )
 
         cv2.imshow(
             "Left Camera (Rectified)" if rectification is not None else "Left Camera",
             left_view_with_contours,
         )
-        cv2.imshow("Right Camera (Rectified)" if rectification is not None else "Right Camera", view_r)
+        cv2.imshow(
+            "Right Camera (Rectified)" if rectification is not None else "Right Camera",
+            view_r,
+        )
         cv2.imshow(vis_title, depth_vis)
         if uncertainty_available:
             cv2.imshow("DL Confidence", confidence_vis)

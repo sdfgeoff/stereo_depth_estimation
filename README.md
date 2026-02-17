@@ -21,7 +21,7 @@ Train a PyTorch stereo disparity model on FoundationStereo with `uv` and track r
 ```bash
 cd /home/geoffrey/Projects/foundation-stereo-depth
 uv sync
-uv run foundation-stereo-depth --epochs 5 --batch-size 8 --augment
+uv run foundation-stereo-depth --epochs 5 --batch-size 8
 ```
 
 Default dataset path:
@@ -34,6 +34,34 @@ If needed, override with:
 uv run foundation-stereo-depth --dataset-root /path/to/FoundationStereo
 ```
 
+## Code Quality
+
+Install dev tooling:
+
+```bash
+uv sync --dev
+```
+
+Run Ruff as an autoformatter:
+
+```bash
+uv run ruff format .
+```
+
+Check formatting without modifying files (matches CI):
+
+```bash
+uv run ruff format --check .
+```
+
+Run Pyright type checking:
+
+```bash
+uv run pyright src/foundation_stereo_depth
+```
+
+GitHub Actions runs `ruff format --check .` and `pyright src/foundation_stereo_depth` on every push and pull request.
+
 ## Useful Flags
 
 ```bash
@@ -44,7 +72,7 @@ uv run foundation-stereo-depth --dataset-root /path/to/FoundationStereo
 --device auto
 ```
 
-Augmentation knobs (applied independently to left/right when `--augment` is set):
+Augmentation knobs (applied independently to left/right):
 
 ```bash
 --brightness-jitter 0.25

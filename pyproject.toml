@@ -17,6 +17,12 @@ dependencies = [
     "tqdm>=4.67.3",
 ]
 
+[dependency-groups]
+dev = [
+    "pyright>=1.1.405",
+    "ruff>=0.13.0",
+]
+
 [project.scripts]
 foundation-stereo-depth = "foundation_stereo_depth.train:main"
 foundation-stereo-monitor = "foundation_stereo_depth.monitor:main"

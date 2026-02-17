@@ -3,22 +3,36 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from camera_setup import CameraConfig, drop_frames, log_camera_info, open_camera, warmup_cameras
+from camera_setup import (
+    CameraConfig,
+    drop_frames,
+    log_camera_info,
+    open_camera,
+    warmup_cameras,
+)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Calibrate stereo USB cameras using a chessboard.")
+    parser = argparse.ArgumentParser(
+        description="Calibrate stereo USB cameras using a chessboard."
+    )
     parser.add_argument("--left", type=int, required=True, help="Left camera index.")
     parser.add_argument("--right", type=int, required=True, help="Right camera index.")
-    parser.add_argument("--rows", type=int, default=6, help="Inner chessboard corners per column.")
-    parser.add_argument("--cols", type=int, default=9, help="Inner chessboard corners per row.")
+    parser.add_argument(
+        "--rows", type=int, default=6, help="Inner chessboard corners per column."
+    )
+    parser.add_argument(
+        "--cols", type=int, default=9, help="Inner chessboard corners per row."
+    )
     parser.add_argument(
         "--square-size",
         type=float,
         required=True,
         help="Chessboard square size in meters (example: 0.024).",
     )
-    parser.add_argument("--samples", type=int, default=25, help="Successful stereo pairs to collect.")
+    parser.add_argument(
+        "--samples", type=int, default=25, help="Successful stereo pairs to collect."
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -34,8 +48,12 @@ def parse_args() -> argparse.Namespace:
         default="MJPG",
         help="Requested pixel format (for example: MJPG, YUYV).",
     )
-    parser.add_argument("--buffer-size", type=int, default=1, help="Capture queue size.")
-    parser.add_argument("--warmup-frames", type=int, default=20, help="Initial frames to discard.")
+    parser.add_argument(
+        "--buffer-size", type=int, default=1, help="Capture queue size."
+    )
+    parser.add_argument(
+        "--warmup-frames", type=int, default=20, help="Initial frames to discard."
+    )
     parser.add_argument(
         "--drop-frames",
         type=int,
@@ -50,6 +68,7 @@ def make_object_points(rows: int, cols: int, square_size: float) -> np.ndarray:
     grid[:, :2] = np.mgrid[0:cols, 0:rows].T.reshape(-1, 2)
     grid *= square_size
     return grid
+
 
 def main() -> None:
     args = parse_args()
@@ -71,7 +90,9 @@ def main() -> None:
     cap_r = open_camera(args.right, config)
 
     if not cap_l.isOpened() or not cap_r.isOpened():
-        raise RuntimeError("Could not open both cameras. Check indices with list_cameras.py.")
+        raise RuntimeError(
+            "Could not open both cameras. Check indices with list_cameras.py."
+        )
 
     for label, cap in (("Left", cap_l), ("Right", cap_r)):
         log_camera_info(label, cap)
@@ -114,15 +135,23 @@ def main() -> None:
         display_l = frame_l.copy()
         display_r = frame_r.copy()
         if found_l:
-            corners_l = cv2.cornerSubPix(gray_l, corners_l, (11, 11), (-1, -1), criteria)
+            corners_l = cv2.cornerSubPix(
+                gray_l, corners_l, (11, 11), (-1, -1), criteria
+            )
             cv2.drawChessboardCorners(display_l, pattern_size, corners_l, found_l)
         if found_r:
-            corners_r = cv2.cornerSubPix(gray_r, corners_r, (11, 11), (-1, -1), criteria)
+            corners_r = cv2.cornerSubPix(
+                gray_r, corners_r, (11, 11), (-1, -1), criteria
+            )
             cv2.drawChessboardCorners(display_r, pattern_size, corners_r, found_r)
 
         combined = np.hstack([display_l, display_r])
-        status = f"pairs {len(obj_points)}/{args.samples} | board L:{found_l} R:{found_r}"
-        cv2.putText(combined, status, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (50, 240, 50), 2)
+        status = (
+            f"pairs {len(obj_points)}/{args.samples} | board L:{found_l} R:{found_r}"
+        )
+        cv2.putText(
+            combined, status, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (50, 240, 50), 2
+        )
         cv2.imshow("Stereo Calibration (left | right)", combined)
 
         key = cv2.waitKey(1) & 0xFF
@@ -139,13 +168,19 @@ def main() -> None:
     cv2.destroyAllWindows()
 
     if len(obj_points) < 8:
-        raise RuntimeError("Not enough pairs for reliable calibration. Capture more samples.")
+        raise RuntimeError(
+            "Not enough pairs for reliable calibration. Capture more samples."
+        )
     if image_size is None:
         raise RuntimeError("No frames captured.")
 
     print("Running mono calibration...")
-    rms_l, mtx_l, dist_l, _, _ = cv2.calibrateCamera(obj_points, img_points_l, image_size, None, None)
-    rms_r, mtx_r, dist_r, _, _ = cv2.calibrateCamera(obj_points, img_points_r, image_size, None, None)
+    rms_l, mtx_l, dist_l, _, _ = cv2.calibrateCamera(
+        obj_points, img_points_l, image_size, None, None
+    )
+    rms_r, mtx_r, dist_r, _, _ = cv2.calibrateCamera(
+        obj_points, img_points_r, image_size, None, None
+    )
     print(f"Mono RMS left: {rms_l:.4f}, right: {rms_r:.4f}")
 
     flags = cv2.CALIB_FIX_INTRINSIC

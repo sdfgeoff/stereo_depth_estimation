@@ -3,7 +3,13 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from camera_setup import CameraConfig, drop_frames, log_camera_info, open_camera, warmup_cameras
+from camera_setup import (
+    CameraConfig,
+    drop_frames,
+    log_camera_info,
+    open_camera,
+    warmup_cameras,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -25,22 +31,30 @@ def parse_args() -> argparse.Namespace:
         default="MJPG",
         help="Requested pixel format (for example: MJPG, YUYV).",
     )
-    parser.add_argument("--buffer-size", type=int, default=1, help="Capture queue size.")
-    parser.add_argument("--warmup-frames", type=int, default=20, help="Initial frames to discard.")
+    parser.add_argument(
+        "--buffer-size", type=int, default=1, help="Capture queue size."
+    )
+    parser.add_argument(
+        "--warmup-frames", type=int, default=20, help="Initial frames to discard."
+    )
     parser.add_argument(
         "--drop-frames",
         type=int,
         default=1,
         help="Extra frames to drop each loop to reduce latency.",
     )
-    parser.add_argument("--min-disparity", type=int, default=0, help="SGBM min disparity.")
+    parser.add_argument(
+        "--min-disparity", type=int, default=0, help="SGBM min disparity."
+    )
     parser.add_argument(
         "--num-disparities",
         type=int,
         default=16 * 8,
         help="SGBM disparity range, multiple of 16.",
     )
-    parser.add_argument("--block-size", type=int, default=7, help="SGBM block size (odd).")
+    parser.add_argument(
+        "--block-size", type=int, default=7, help="SGBM block size (odd)."
+    )
     parser.add_argument(
         "--center-window",
         type=int,
@@ -166,7 +180,9 @@ def main() -> None:
             text = f"center depth: {dist_m:.3f} m"
         else:
             text = "center depth: n/a"
-        cv2.putText(disp_vis, text, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        cv2.putText(
+            disp_vis, text, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2
+        )
 
         cv2.imshow("Left Camera (Rectified)", rect_l)
         cv2.imshow("Right Camera (Rectified)", rect_r)

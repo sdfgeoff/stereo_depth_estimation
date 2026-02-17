@@ -4,7 +4,9 @@ import cv2
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Probe camera indices.")
-    parser.add_argument("--max-index", type=int, default=10, help="Largest index to test.")
+    parser.add_argument(
+        "--max-index", type=int, default=10, help="Largest index to test."
+    )
     args = parser.parse_args()
 
     print("Detecting cameras...")

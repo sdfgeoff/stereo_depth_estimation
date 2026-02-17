@@ -29,8 +29,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--height", type=int, default=240, help="Cached image height.")
     parser.add_argument("--width", type=int, default=320, help="Cached image width.")
-    parser.add_argument("--max-samples", type=int, default=0, help="Optional cap on number of samples.")
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing cache entries.")
+    parser.add_argument(
+        "--max-samples", type=int, default=0, help="Optional cap on number of samples."
+    )
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Overwrite existing cache entries."
+    )
     parser.add_argument(
         "--compress",
         action="store_true",
@@ -50,7 +54,9 @@ def build_cache(args: argparse.Namespace) -> None:
     if not samples:
         raise ValueError(f"No samples discovered under: {dataset_root}")
 
-    dataset = FoundationStereoDataset(samples=samples, image_size=(args.height, args.width), augment=False)
+    dataset = FoundationStereoDataset(
+        samples=samples, image_size=(args.height, args.width), augment=False
+    )
     save_fn = np.savez_compressed if args.compress else np.savez
 
     written = 0
@@ -67,8 +73,12 @@ def build_cache(args: argparse.Namespace) -> None:
 
         item = dataset[index]
         stereo_input = item["input"].numpy()
-        left = np.clip(stereo_input[:3].transpose(1, 2, 0) * 255.0, 0, 255).astype(np.uint8)
-        right = np.clip(stereo_input[3:6].transpose(1, 2, 0) * 255.0, 0, 255).astype(np.uint8)
+        left = np.clip(stereo_input[:3].transpose(1, 2, 0) * 255.0, 0, 255).astype(
+            np.uint8
+        )
+        right = np.clip(stereo_input[3:6].transpose(1, 2, 0) * 255.0, 0, 255).astype(
+            np.uint8
+        )
         disparity = item["target"][0].numpy().astype(np.float16)
         save_fn(cache_file, left=left, right=right, disparity=disparity)
         written += 1
@@ -87,7 +97,9 @@ def build_cache(args: argparse.Namespace) -> None:
         "elapsed_seconds": elapsed_sec,
         "created_at_unix": time.time(),
     }
-    (cache_root / "cache_meta.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    (cache_root / "cache_meta.json").write_text(
+        json.dumps(metadata, indent=2), encoding="utf-8"
+    )
 
     print(
         "Cache build complete: "

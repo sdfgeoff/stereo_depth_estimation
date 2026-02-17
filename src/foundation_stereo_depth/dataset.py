@@ -21,7 +21,11 @@ class StereoSample:
 
 def depth_uint8_decoding(depth_uint8: np.ndarray, scale: float = 1000.0) -> np.ndarray:
     depth_uint8 = depth_uint8.astype(np.float32)
-    out = depth_uint8[..., 0] * 255.0 * 255.0 + depth_uint8[..., 1] * 255.0 + depth_uint8[..., 2]
+    out = (
+        depth_uint8[..., 0] * 255.0 * 255.0
+        + depth_uint8[..., 1] * 255.0
+        + depth_uint8[..., 2]
+    )
     return out / scale
 
 
@@ -45,7 +49,9 @@ def discover_samples(dataset_root: str | Path) -> list[StereoSample]:
         right_rgb_dir = scene_dir / "dataset" / "data" / "right" / "rgb"
         disparity_dir = scene_dir / "dataset" / "data" / "left" / "disparity"
 
-        if not (left_rgb_dir.exists() and right_rgb_dir.exists() and disparity_dir.exists()):
+        if not (
+            left_rgb_dir.exists() and right_rgb_dir.exists() and disparity_dir.exists()
+        ):
             continue
 
         for disparity_path in sorted(disparity_dir.glob("*.png")):
@@ -94,13 +100,17 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
         self.blur_prob = blur_prob
         self.blur_sigma_max = blur_sigma_max
         self.blur_kernel_size = blur_kernel_size
-        self.cache_root = Path(cache_root).expanduser().resolve() if cache_root is not None else None
+        self.cache_root = (
+            Path(cache_root).expanduser().resolve() if cache_root is not None else None
+        )
         self.require_cache = require_cache
 
         if not 0.0 <= self.blur_prob <= 1.0:
             raise ValueError(f"blur_prob must be in [0, 1], got {self.blur_prob}")
         if self.blur_kernel_size < 3 or self.blur_kernel_size % 2 == 0:
-            raise ValueError(f"blur_kernel_size must be odd and >= 3, got {self.blur_kernel_size}")
+            raise ValueError(
+                f"blur_kernel_size must be odd and >= 3, got {self.blur_kernel_size}"
+            )
         if len(self.samples) == 0:
             raise ValueError("No samples were provided.")
 
@@ -150,7 +160,10 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
 
         if left_np.ndim != 3 or right_np.ndim != 3 or disparity_np.ndim != 2:
             return None
-        if left_np.shape[:2] != self.image_size or right_np.shape[:2] != self.image_size:
+        if (
+            left_np.shape[:2] != self.image_size
+            or right_np.shape[:2] != self.image_size
+        ):
             return None
         if disparity_np.shape != self.image_size:
             return None
@@ -188,8 +201,12 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
         return float(torch.empty(1).uniform_(sigma_min, sigma_max).item())
 
     def _augment_rgb(self, image: torch.Tensor) -> torch.Tensor:
-        image = TF.adjust_brightness(image, self._sample_jitter_factor(self.brightness_jitter))
-        image = TF.adjust_contrast(image, self._sample_jitter_factor(self.contrast_jitter))
+        image = TF.adjust_brightness(
+            image, self._sample_jitter_factor(self.brightness_jitter)
+        )
+        image = TF.adjust_contrast(
+            image, self._sample_jitter_factor(self.contrast_jitter)
+        )
         image = TF.adjust_hue(image, self._sample_hue_shift())
         if self._should_apply_blur():
             sigma = self._sample_blur_sigma()
