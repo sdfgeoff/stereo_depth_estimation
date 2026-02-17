@@ -12,6 +12,7 @@ from typing import Any
 import mlflow
 import numpy as np
 import torch
+from PIL import Image
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -20,6 +21,7 @@ from .dataset import FoundationStereoDataset, StereoSample, discover_samples
 from .model import StereoUNet
 
 MLFLOW_TRAIN_LOG_EVERY_BATCHES = 10
+MLFLOW_PREVIEW_SAMPLES = 8
 
 
 @dataclass
@@ -208,6 +210,78 @@ def split_samples(
     train_samples = shuffled[:-val_count]
     val_samples = shuffled[-val_count:]
     return train_samples, val_samples
+
+
+def _normalize_map(map_2d: np.ndarray) -> np.ndarray:
+    finite = np.isfinite(map_2d)
+    if not finite.any():
+        return np.zeros((*map_2d.shape, 3), dtype=np.uint8)
+    values = map_2d[finite]
+    vmin = float(np.percentile(values, 5))
+    vmax = float(np.percentile(values, 95))
+    scale = max(vmax - vmin, 1e-6)
+    normalized = np.clip((map_2d - vmin) / scale, 0.0, 1.0)
+    grayscale = (normalized * 255.0).astype(np.uint8)
+    return np.stack([grayscale, grayscale, grayscale], axis=-1)
+
+
+def save_preview(
+    save_path: Path,
+    input_tensor: torch.Tensor,
+    target_tensor: torch.Tensor,
+    pred_tensor: torch.Tensor,
+) -> None:
+    left = input_tensor[:3].detach().cpu().permute(1, 2, 0).numpy()
+    right = input_tensor[3:6].detach().cpu().permute(1, 2, 0).numpy()
+    left_img = np.clip(left * 255.0, 0, 255).astype(np.uint8)
+    right_img = np.clip(right * 255.0, 0, 255).astype(np.uint8)
+
+    target_map = target_tensor[0].detach().cpu().numpy()
+    pred_map = pred_tensor[0].detach().cpu().numpy()
+
+    target_img = _normalize_map(target_map)
+    pred_img = _normalize_map(pred_map)
+
+    montage = np.concatenate([left_img, right_img, target_img, pred_img], axis=1)
+    Image.fromarray(montage).save(save_path)
+
+
+def log_epoch_previews(
+    model: StereoUNet,
+    loader: DataLoader[dict[str, torch.Tensor]],
+    device: torch.device,
+    epoch: int,
+    preview_root: Path,
+) -> int:
+    previews_dir = preview_root / f"epoch_{epoch:04d}"
+    previews_dir.mkdir(parents=True, exist_ok=True)
+
+    was_training = model.training
+    model.eval()
+
+    preview_written = 0
+    with torch.inference_mode():
+        for batch_index, batch in enumerate(loader):
+            inputs = batch["input"].to(device, non_blocking=True)
+            targets = batch["target"].to(device, non_blocking=True)
+            preds = model(inputs)
+
+            for inner_index in range(inputs.shape[0]):
+                save_path = (
+                    previews_dir / f"sample_{batch_index:03d}_{inner_index:02d}.png"
+                )
+                save_preview(
+                    save_path,
+                    inputs[inner_index],
+                    targets[inner_index],
+                    preds[inner_index],
+                )
+                preview_written += 1
+
+    if was_training:
+        model.train()
+
+    return preview_written
 
 
 def run_epoch(
@@ -462,6 +536,30 @@ def main() -> None:
             persistent_workers=persistent_workers,
         )
 
+    preview_source_samples = val_samples if val_samples else train_samples
+    preview_split_name = "val" if val_samples else "train"
+    preview_count = min(MLFLOW_PREVIEW_SAMPLES, len(preview_source_samples))
+    preview_loader = None
+    if preview_count > 0:
+        preview_dataset = FoundationStereoDataset(
+            preview_source_samples[:preview_count],
+            image_size=image_size,
+            cache_root=args.cache_root,
+            require_cache=args.require_cache,
+        )
+        preview_loader = DataLoader(
+            preview_dataset,
+            batch_size=min(args.batch_size, preview_count),
+            shuffle=False,
+            num_workers=0,
+            pin_memory=pin_memory,
+            persistent_workers=False,
+        )
+        print(
+            "MLflow previews: "
+            f"logging {preview_count} fixed {preview_split_name} samples each epoch."
+        )
+
     model = StereoUNet(in_channels=6, out_channels=1).to(device)
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
@@ -476,6 +574,8 @@ def main() -> None:
         output_dir = Path(args.output_dir).expanduser().resolve() / run_id
         checkpoints_dir = output_dir / "checkpoints"
         checkpoints_dir.mkdir(parents=True, exist_ok=True)
+        preview_root = output_dir / "mlflow_previews"
+        preview_root.mkdir(parents=True, exist_ok=True)
         config_path = output_dir / "config.json"
         config_path.write_text(json.dumps(asdict(args), indent=2), encoding="utf-8")
 
@@ -520,6 +620,19 @@ def main() -> None:
                 epoch_metrics["val_rmse"] = val_metrics["rmse"]
                 epoch_metrics["val_sigma"] = val_metrics["sigma"]
             mlflow.log_metrics(epoch_metrics, step=epoch)
+
+            if preview_loader is not None:
+                log_epoch_previews(
+                    model=model,
+                    loader=preview_loader,
+                    device=device,
+                    epoch=epoch,
+                    preview_root=preview_root,
+                )
+                mlflow.log_artifacts(
+                    str(preview_root / f"epoch_{epoch:04d}"),
+                    artifact_path=f"previews/epoch_{epoch:04d}",
+                )
 
             save_checkpoint(
                 last_checkpoint, epoch, model, optimizer, args, epoch_metrics
