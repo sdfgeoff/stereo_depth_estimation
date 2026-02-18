@@ -73,8 +73,8 @@ def parse_args() -> TrainConfig:
         "--height", type=int, default=240, help="Training image height."
     )
     parser.add_argument("--width", type=int, default=320, help="Training image width.")
-    parser.add_argument("--epochs", type=int, default=10, help="Number of epochs.")
-    parser.add_argument("--batch-size", type=int, default=8, help="Batch size.")
+    parser.add_argument("--epochs", type=int, default=100, help="Number of epochs.")
+    parser.add_argument("--batch-size", type=int, default=30, help="Batch size.")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
     parser.add_argument(
         "--weight-decay", type=float, default=1e-4, help="Weight decay."
@@ -174,7 +174,7 @@ def parse_args() -> TrainConfig:
     parser.add_argument(
         "--hue-jitter",
         type=float,
-        default=0.05,
+        default=0.09,
         help="Hue jitter amount; shift sampled from [-x, x].",
     )
     parser.add_argument(
@@ -186,19 +186,19 @@ def parse_args() -> TrainConfig:
     parser.add_argument(
         "--noise-std-max",
         type=float,
-        default=0.03,
+        default=0.05,
         help="Max stddev for additive Gaussian noise sampled in [0, x].",
     )
     parser.add_argument(
         "--blur-prob",
         type=float,
-        default=0.0,
+        default=0.03,
         help="Probability of applying Gaussian blur per image.",
     )
     parser.add_argument(
         "--blur-sigma-max",
         type=float,
-        default=0.0,
+        default=1.0,
         help="Max sigma for Gaussian blur (if <= 0, blur is disabled).",
     )
     parser.add_argument(
