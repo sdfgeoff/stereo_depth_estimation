@@ -15,3 +15,7 @@ outputs/
 mlflow.db
 monitor_outputs/
 logs/
+
+# Rust trainer build output
+rust-trainer/target/
+rust-trainer/outputs-rs

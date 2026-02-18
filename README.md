@@ -26,6 +26,30 @@ uv sync
 uv run foundation-stereo-depth --epochs 5 --batch-size 8
 ```
 
+### 1b) Train In Rust (Candle)
+
+```bash
+cd /home/geoffrey/Projects/foundation-stereo-depth/rust-trainer
+cargo run --release -- \
+  --dataset-root /home/geoffrey/Reference/OffTopic/Datasets/FoundationStereo \
+  --epochs 5 \
+  --batch-size 8
+```
+
+This Rust pipeline mirrors the Python training flow (sample discovery, disparity decode/resizing, U-Net + uncertainty head, heteroscedastic NLL, preview images, best/last checkpoints) and supports read-through NPZ cache compatibility with the Python pipeline.
+
+Rust metrics/checkpoint metadata are written as JSON + `safetensors` artifacts under `outputs-rs/`; MLflow integration is currently Python-only.
+
+Build the resized cache only (no training):
+
+```bash
+cd /home/geoffrey/Projects/foundation-stereo-depth/rust-trainer
+cargo run --release -- \
+  --dataset-root /home/geoffrey/Reference/OffTopic/Datasets/FoundationStereo \
+  --cache-root /path/on/ssd/foundation_stereo_cache \
+  --build-cache-only
+```
+
 Enable `torch.compile` for training with:
 
 ```bash
