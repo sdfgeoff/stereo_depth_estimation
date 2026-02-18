@@ -5,10 +5,14 @@ import json
 import time
 from pathlib import Path
 
-import numpy as np
 from tqdm import tqdm
 
-from .dataset import FoundationStereoDataset, discover_samples, sample_cache_relpath
+from .dataset import (
+    FoundationStereoDataset,
+    discover_samples,
+    sample_cache_relpath,
+    save_cached_sample,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,8 +61,6 @@ def build_cache(args: argparse.Namespace) -> None:
     dataset = FoundationStereoDataset(
         samples=samples, image_size=(args.height, args.width), augment=False
     )
-    save_fn = np.savez_compressed if args.compress else np.savez
-
     written = 0
     skipped = 0
     started_at = time.time()
@@ -72,15 +74,17 @@ def build_cache(args: argparse.Namespace) -> None:
         cache_file.parent.mkdir(parents=True, exist_ok=True)
 
         item = dataset[index]
-        stereo_input = item["input"].numpy()
-        left = np.clip(stereo_input[:3].transpose(1, 2, 0) * 255.0, 0, 255).astype(
-            np.uint8
+        stereo_input = item["input"]
+        left = stereo_input[:3]
+        right = stereo_input[3:6]
+        disparity = item["target"]
+        save_cached_sample(
+            cache_file,
+            left=left,
+            right=right,
+            target=disparity,
+            compress=args.compress,
         )
-        right = np.clip(stereo_input[3:6].transpose(1, 2, 0) * 255.0, 0, 255).astype(
-            np.uint8
-        )
-        disparity = item["target"][0].numpy().astype(np.float16)
-        save_fn(cache_file, left=left, right=right, disparity=disparity)
         written += 1
 
     elapsed_sec = time.time() - started_at

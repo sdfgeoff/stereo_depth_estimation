@@ -9,6 +9,7 @@ from foundation_stereo_depth.dataset import (
     FoundationStereoDataset,
     StereoSample,
     depth_uint8_decoding,
+    load_cached_sample,
     sample_cache_relpath,
 )
 
@@ -82,3 +83,46 @@ def test_sample_cache_relpath_noncanonical_layout_uses_stable_misc_key() -> None
     assert relpath.name.startswith("disp_42_")
     assert relpath.suffix == ".npz"
     assert relpath == sample_cache_relpath(sample)
+
+
+def test_dataset_cache_read_through_writes_missing_entries(tmp_path: Path) -> None:
+    dataset_root = tmp_path / "dataset"
+    cache_root = tmp_path / "cache"
+    dataset_root.mkdir()
+    cache_root.mkdir()
+
+    left_path = dataset_root / "left.png"
+    right_path = dataset_root / "right.png"
+    disparity_path = dataset_root / "disp.png"
+
+    _write_rgb(left_path, (2, 4))
+    _write_rgb(right_path, (2, 4))
+
+    source_disparity = np.full((2, 4), 1.25, dtype=np.float32)
+    Image.fromarray(_encode_disparity_to_rgb(source_disparity), mode="RGB").save(
+        disparity_path
+    )
+
+    sample = StereoSample(left_path, right_path, disparity_path)
+    cache_file = cache_root / sample_cache_relpath(sample)
+    assert not cache_file.exists()
+
+    dataset = FoundationStereoDataset(
+        [sample],
+        image_size=(2, 4),
+        cache_root=cache_root,
+        require_cache=False,
+    )
+
+    first_item = dataset[0]
+    assert cache_file.exists()
+
+    second_item = dataset[0]
+    np.testing.assert_allclose(
+        first_item["target"].numpy(),
+        second_item["target"].numpy(),
+        atol=1e-3,
+    )
+
+    loaded = load_cached_sample(cache_file, (2, 4))
+    assert loaded is not None

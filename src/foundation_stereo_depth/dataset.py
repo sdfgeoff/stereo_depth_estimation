@@ -83,6 +83,51 @@ def sample_cache_relpath(sample: StereoSample) -> Path:
     return Path("misc") / f"{sample.disparity_path.stem}_{source_hash}.npz"
 
 
+def load_cached_sample(
+    cache_file: Path, image_size: tuple[int, int]
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
+    with np.load(cache_file) as cached:
+        if not {"left", "right", "disparity"}.issubset(cached.files):
+            return None
+
+        left_np = cached["left"]
+        right_np = cached["right"]
+        disparity_np = cached["disparity"]
+
+    if left_np.ndim != 3 or right_np.ndim != 3 or disparity_np.ndim != 2:
+        return None
+    if left_np.shape[:2] != image_size or right_np.shape[:2] != image_size:
+        return None
+    if disparity_np.shape != image_size:
+        return None
+
+    left = torch.from_numpy(left_np.astype(np.float32) / 255.0).permute(2, 0, 1)
+    right = torch.from_numpy(right_np.astype(np.float32) / 255.0).permute(2, 0, 1)
+    target = torch.from_numpy(disparity_np.astype(np.float32)).unsqueeze(0)
+    return left, right, target
+
+
+def save_cached_sample(
+    cache_file: Path,
+    left: torch.Tensor,
+    right: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    compress: bool = False,
+) -> None:
+    left_np = np.clip(
+        left.detach().cpu().numpy().transpose(1, 2, 0) * 255.0, 0, 255
+    ).astype(np.uint8)
+    right_np = np.clip(
+        right.detach().cpu().numpy().transpose(1, 2, 0) * 255.0, 0, 255
+    ).astype(np.uint8)
+    disparity_np = target[0].detach().cpu().numpy().astype(np.float16)
+
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    save_fn = np.savez_compressed if compress else np.savez
+    save_fn(cache_file, left=left_np, right=right_np, disparity=disparity_np)
+
+
 class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
     def __init__(
         self,
@@ -166,32 +211,6 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
         tensor = tensor * width_scale
         return tensor
 
-    def _load_cached_sample(
-        self, cache_file: Path
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
-        with np.load(cache_file) as cached:
-            if not {"left", "right", "disparity"}.issubset(cached.files):
-                return None
-
-            left_np = cached["left"]
-            right_np = cached["right"]
-            disparity_np = cached["disparity"]
-
-        if left_np.ndim != 3 or right_np.ndim != 3 or disparity_np.ndim != 2:
-            return None
-        if (
-            left_np.shape[:2] != self.image_size
-            or right_np.shape[:2] != self.image_size
-        ):
-            return None
-        if disparity_np.shape != self.image_size:
-            return None
-
-        left = torch.from_numpy(left_np.astype(np.float32) / 255.0).permute(2, 0, 1)
-        right = torch.from_numpy(right_np.astype(np.float32) / 255.0).permute(2, 0, 1)
-        target = torch.from_numpy(disparity_np.astype(np.float32)).unsqueeze(0)
-        return left, right, target
-
     def _sample_jitter_factor(self, jitter: float) -> float:
         if jitter <= 0.0:
             return 1.0
@@ -255,13 +274,16 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
         left = None
         right = None
         target = None
+        loaded_from_cache = False
+        cache_file = None
 
         if self.cache_root is not None:
             cache_file = self.cache_root / sample_cache_relpath(sample)
             if cache_file.exists():
-                loaded = self._load_cached_sample(cache_file)
+                loaded = load_cached_sample(cache_file, self.image_size)
                 if loaded is not None:
                     left, right, target = loaded
+                    loaded_from_cache = True
                 elif self.require_cache:
                     raise ValueError(
                         f"Cache entry is invalid or shape-mismatched for sample: {cache_file}"
@@ -273,6 +295,9 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
             left = self._load_rgb(sample.left_rgb_path)
             right = self._load_rgb(sample.right_rgb_path)
             target = self._load_disparity(sample.disparity_path)
+
+        if cache_file is not None and not self.require_cache and not loaded_from_cache:
+            save_cached_sample(cache_file, left, right, target, compress=False)
 
         if self.augment:
             left = self._augment_rgb(left)
