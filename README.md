@@ -26,6 +26,12 @@ uv sync
 uv run foundation-stereo-depth --epochs 5 --batch-size 8
 ```
 
+Enable `torch.compile` for training with:
+
+```bash
+uv run foundation-stereo-depth --compile
+```
+
 Default dataset path:
 
 `/home/geoffrey/Reference/OffTopic/Datasets/FoundationStereo`
@@ -91,6 +97,9 @@ GitHub Actions runs `ruff format --check .` and `pyright src/foundation_stereo_d
 --val-fraction 0.1
 --num-workers 4
 --device auto
+--compile
+--compile-mode default
+--compile-backend inductor
 ```
 
 Augmentation knobs (applied independently to left/right):
@@ -141,27 +150,6 @@ Start UI:
 ```bash
 uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
 ```
-
-## Monitor An Ongoing Run
-
-You can run a separate CPU-only monitor process that watches `last.pt`, evaluates a fixed probe subset, and optionally writes preview images:
-
-```bash
-CUDA_VISIBLE_DEVICES="" uv run foundation-stereo-monitor \
-  --run-id <RUN_ID> \
-  --watch \
-  --interval-sec 20 \
-  --num-samples 8 \
-  --split val \
-  --save-previews
-```
-
-Notes:
-
-- It reads checkpoints from `outputs/<RUN_ID>/checkpoints/last.pt`.
-- It writes metrics to `monitor_outputs/<RUN_ID>/latest_metrics.json` and `history.jsonl`.
-- Preview images (if enabled) are written to `monitor_outputs/<RUN_ID>/previews/`.
-- If `--run-id` is omitted, it auto-selects the most recently modified run in `outputs/`.
 
 ## Live USB Stereo Inference
 

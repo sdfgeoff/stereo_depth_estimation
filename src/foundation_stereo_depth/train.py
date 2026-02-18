@@ -7,7 +7,7 @@ import random
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import mlflow
 import numpy as np
@@ -44,6 +44,9 @@ class TrainConfig:
     output_dir: str
     cache_root: str | None
     require_cache: bool
+    compile: bool
+    compile_mode: str
+    compile_backend: str
     augment: bool
     brightness_jitter: float
     contrast_jitter: float
@@ -124,6 +127,25 @@ def parse_args() -> TrainConfig:
         action="store_true",
         help="Fail if any requested sample is missing from --cache-root.",
     )
+    parser.add_argument(
+        "--compile",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable torch.compile for train/val forward passes.",
+    )
+    parser.add_argument(
+        "--compile-mode",
+        type=str,
+        default="default",
+        choices=("default", "reduce-overhead", "max-autotune"),
+        help="torch.compile mode.",
+    )
+    parser.add_argument(
+        "--compile-backend",
+        type=str,
+        default="inductor",
+        help='torch.compile backend (for example: "inductor").',
+    )
 
     parser.add_argument(
         "--augment",
@@ -201,6 +223,32 @@ def resolve_device(device_arg: str) -> torch.device:
     if device_arg == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     return torch.device(device_arg)
+
+
+def maybe_compile_model(
+    model: StereoUNet, args: TrainConfig, device: torch.device
+) -> StereoUNet:
+    if not args.compile:
+        return model
+    if not hasattr(torch, "compile"):
+        raise RuntimeError(
+            "torch.compile is not available in this PyTorch build. Disable --compile."
+        )
+
+    compile_kwargs: dict[str, Any] = {"mode": args.compile_mode}
+    backend = args.compile_backend.strip()
+    if backend:
+        compile_kwargs["backend"] = backend
+
+    if device.type == "cpu":
+        print(
+            "Warning: --compile enabled on CPU. This can increase startup time and may not improve throughput."
+        )
+    print(
+        f"Compiling model with torch.compile(mode={args.compile_mode}, backend={backend or 'default'})."
+    )
+    compiled_model = torch.compile(model, **compile_kwargs)
+    return cast(StereoUNet, compiled_model)
 
 
 def log_epoch_previews(
@@ -409,7 +457,11 @@ def to_mlflow_params(
         "uncertainty_head": True,
         "loss": "heteroscedastic_l1_nll",
         "mlflow_train_log_every_batches": MLFLOW_TRAIN_LOG_EVERY_BATCHES,
+        "compile": args.compile,
     }
+    if args.compile:
+        params["compile_mode"] = args.compile_mode
+        params["compile_backend"] = args.compile_backend
     if args.augment:
         params["brightness_jitter"] = args.brightness_jitter
         params["contrast_jitter"] = args.contrast_jitter
@@ -522,6 +574,7 @@ def main() -> None:
         )
 
     model = StereoUNet(in_channels=6, out_channels=1).to(device)
+    train_model = maybe_compile_model(model, args, device)
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     mlflow.set_tracking_uri(args.mlflow_tracking_uri)
@@ -554,7 +607,7 @@ def main() -> None:
         for epoch in range(1, args.epochs + 1):
             start_time = time.time()
             train_metrics, global_step = run_epoch(
-                model,
+                train_model,
                 train_loader,
                 device,
                 optimizer=optimizer,
@@ -562,7 +615,9 @@ def main() -> None:
                 log_every_batches=MLFLOW_TRAIN_LOG_EVERY_BATCHES,
             )
             if val_loader is not None:
-                val_metrics, _ = run_epoch(model, val_loader, device, optimizer=None)
+                val_metrics, _ = run_epoch(
+                    train_model, val_loader, device, optimizer=None
+                )
             else:
                 val_metrics = train_metrics
 
@@ -584,7 +639,7 @@ def main() -> None:
 
             if preview_loader is not None:
                 log_epoch_previews(
-                    model=model,
+                    model=train_model,
                     loader=preview_loader,
                     device=device,
                     epoch=epoch,
