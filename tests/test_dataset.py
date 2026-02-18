@@ -1,0 +1,71 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+
+from foundation_stereo_depth.dataset import (
+    FoundationStereoDataset,
+    StereoSample,
+    depth_uint8_decoding,
+    sample_cache_relpath,
+)
+
+
+def _encode_disparity_to_rgb(disparity: np.ndarray, scale: float = 1000.0) -> np.ndarray:
+    values = np.round(disparity * scale).astype(np.int64)
+    r = values // (255 * 255)
+    remainder = values - r * (255 * 255)
+    g = remainder // 255
+    b = remainder - g * 255
+    return np.stack([r, g, b], axis=-1).astype(np.uint8)
+
+
+def _write_rgb(path: Path, shape: tuple[int, int]) -> None:
+    h, w = shape
+    Image.fromarray(np.zeros((h, w, 3), dtype=np.uint8), mode="RGB").save(path)
+
+
+def test_depth_uint8_decoding_round_trip() -> None:
+    disparity = np.array([[0.0, 0.125, 1.25], [2.0, 3.5, 10.0]], dtype=np.float32)
+    encoded = _encode_disparity_to_rgb(disparity)
+    decoded = depth_uint8_decoding(encoded)
+    np.testing.assert_allclose(decoded, disparity, atol=1e-3)
+
+
+def test_disparity_resize_scales_with_output_width(tmp_path: Path) -> None:
+    left_path = tmp_path / "left.png"
+    right_path = tmp_path / "right.png"
+    disparity_path = tmp_path / "disp.png"
+
+    original_h, original_w = 2, 4
+    _write_rgb(left_path, (original_h, original_w))
+    _write_rgb(right_path, (original_h, original_w))
+
+    source_disparity = np.full((original_h, original_w), 1.5, dtype=np.float32)
+    disparity_rgb = _encode_disparity_to_rgb(source_disparity)
+    Image.fromarray(disparity_rgb, mode="RGB").save(disparity_path)
+
+    sample = StereoSample(
+        left_rgb_path=left_path,
+        right_rgb_path=right_path,
+        disparity_path=disparity_path,
+    )
+    dataset = FoundationStereoDataset([sample], image_size=(2, 8))
+    item = dataset[0]
+
+    target = item["target"].numpy()
+    expected = np.full((1, 2, 8), 3.0, dtype=np.float32)
+    np.testing.assert_allclose(target, expected, atol=1e-3)
+
+
+def test_sample_cache_relpath_uses_scene_and_stem() -> None:
+    sample = StereoSample(
+        left_rgb_path=Path("/data/scene_01/dataset/data/left/rgb/000123.png"),
+        right_rgb_path=Path("/data/scene_01/dataset/data/right/rgb/000123.png"),
+        disparity_path=Path("/data/scene_01/dataset/data/left/disparity/000123.png"),
+    )
+
+    assert sample_cache_relpath(sample) == Path("scene_01/000123.npz")
+
