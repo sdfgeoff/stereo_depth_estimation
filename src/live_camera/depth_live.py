@@ -3,7 +3,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from camera_setup import (
+from live_camera.camera_setup import (
     CameraConfig,
     drop_frames,
     log_camera_info,

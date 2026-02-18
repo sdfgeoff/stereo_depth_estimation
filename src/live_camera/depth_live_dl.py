@@ -1,26 +1,19 @@
 from __future__ import annotations
 
 import argparse
-import sys
 import time
 from pathlib import Path
 
 import cv2
 import numpy as np
 import torch
-from camera_setup import (
+from live_camera.camera_setup import (
     CameraConfig,
     drop_frames,
     log_camera_info,
     open_camera,
     warmup_cameras,
 )
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SRC_ROOT = PROJECT_ROOT / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
 
 from foundation_stereo_depth.model import StereoUNet, load_state_dict_compat
 
