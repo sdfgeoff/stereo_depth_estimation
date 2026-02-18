@@ -28,6 +28,10 @@ dev = [
 foundation-stereo-depth = "foundation_stereo_depth.train:main"
 foundation-stereo-monitor = "foundation_stereo_depth.monitor:main"
 foundation-stereo-cache = "foundation_stereo_depth.cache:main"
+foundation-stereo-live-view = "live_camera.depth_live_dl:main"
+foundation-stereo-sgbm-live = "live_camera.depth_live:main"
+foundation-stereo-calibrate = "live_camera.calibrate:main"
+foundation-stereo-list-cameras = "live_camera.list_cameras:main"
 
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]

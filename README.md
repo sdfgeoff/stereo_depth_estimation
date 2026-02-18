@@ -18,6 +18,8 @@ Train a PyTorch stereo disparity model on FoundationStereo with `uv` and track r
 
 ## Quick Start
 
+### 1) Train
+
 ```bash
 cd /home/geoffrey/Projects/foundation-stereo-depth
 uv sync
@@ -32,6 +34,25 @@ If needed, override with:
 
 ```bash
 uv run foundation-stereo-depth --dataset-root /path/to/FoundationStereo
+```
+
+### 2) Launch Live View
+
+```bash
+cd /home/geoffrey/Projects/foundation-stereo-depth
+uv sync
+uv run foundation-stereo-live-view \
+  --left 0 \
+  --right 2 \
+  --run-id <RUN_ID> \
+  --watch-checkpoint \
+  --device cpu
+```
+
+If you need camera indices first:
+
+```bash
+uv run foundation-stereo-list-cameras
 ```
 
 ## Code Quality
@@ -57,10 +78,10 @@ uv run ruff format --check .
 Run Pyright type checking:
 
 ```bash
-uv run pyright src/foundation_stereo_depth
+uv run pyright src/foundation_stereo_depth src/live_camera
 ```
 
-GitHub Actions runs `ruff format --check .` and `pyright src/foundation_stereo_depth` on every push and pull request.
+GitHub Actions runs `ruff format --check .` and `pyright src/foundation_stereo_depth src/live_camera` on every push and pull request.
 
 ## Useful Flags
 
@@ -100,9 +121,13 @@ Then train using the cache:
 
 ```bash
 uv run foundation-stereo-depth \
-  --cache-root /path/on/ssd/foundation_stereo_cache \
-  --require-cache
+  --cache-root /path/on/ssd/foundation_stereo_cache
 ```
+
+With `--cache-root`, training now uses read-through caching:
+- cache hits are read directly
+- cache misses are loaded once from source and written back to cache for later epochs
+- use `--require-cache` only if you want strict fail-fast behavior for missing entries
 
 ## MLflow
 
@@ -140,11 +165,11 @@ Notes:
 
 ## Live USB Stereo Inference
 
-Use the live OpenCV script to run the trained model on your USB stereo rig:
+Use the live app to run the trained model on your USB stereo rig:
 
 ```bash
 cd /home/geoffrey/Projects/foundation-stereo-depth
-uv run python src/live_camera/depth_live_dl.py \
+uv run foundation-stereo-live-view \
   --left 0 \
   --right 2 \
   --run-id <RUN_ID> \
