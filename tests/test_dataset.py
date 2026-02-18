@@ -69,3 +69,16 @@ def test_sample_cache_relpath_uses_scene_and_stem() -> None:
 
     assert sample_cache_relpath(sample) == Path("scene_01/000123.npz")
 
+
+def test_sample_cache_relpath_noncanonical_layout_uses_stable_misc_key() -> None:
+    sample = StereoSample(
+        left_rgb_path=Path("/tmp/left_view.png"),
+        right_rgb_path=Path("/tmp/right_view.png"),
+        disparity_path=Path("/tmp/disp_42.png"),
+    )
+
+    relpath = sample_cache_relpath(sample)
+    assert relpath.parent == Path("misc")
+    assert relpath.name.startswith("disp_42_")
+    assert relpath.suffix == ".npz"
+    assert relpath == sample_cache_relpath(sample)

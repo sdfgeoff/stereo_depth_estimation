@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -66,12 +67,20 @@ def discover_samples(dataset_root: str | Path) -> list[StereoSample]:
 
 def sample_cache_relpath(sample: StereoSample) -> Path:
     left_parts = sample.left_rgb_path.parts
-    scene_name = sample.left_rgb_path.parents[4].name
     if "dataset" in left_parts:
         dataset_index = left_parts.index("dataset")
         if dataset_index > 0:
             scene_name = left_parts[dataset_index - 1]
-    return Path(scene_name) / f"{sample.disparity_path.stem}.npz"
+            return Path(scene_name) / f"{sample.disparity_path.stem}.npz"
+
+    # Fallback for non-canonical layouts where ".../<scene>/dataset/..." is absent.
+    source_key = (
+        f"{sample.left_rgb_path.as_posix()}|"
+        f"{sample.right_rgb_path.as_posix()}|"
+        f"{sample.disparity_path.as_posix()}"
+    )
+    source_hash = hashlib.blake2s(source_key.encode("utf-8"), digest_size=8).hexdigest()
+    return Path("misc") / f"{sample.disparity_path.stem}_{source_hash}.npz"
 
 
 class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
