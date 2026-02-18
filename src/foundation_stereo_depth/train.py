@@ -47,7 +47,9 @@ class TrainConfig:
     augment: bool
     brightness_jitter: float
     contrast_jitter: float
+    saturation_jitter: float
     hue_jitter: float
+    gamma_jitter: float
     noise_std_max: float
     blur_prob: float
     blur_sigma_max: float
@@ -142,10 +144,22 @@ def parse_args() -> TrainConfig:
         help="Contrast jitter amount; factor sampled from [1-x, 1+x].",
     )
     parser.add_argument(
+        "--saturation-jitter",
+        type=float,
+        default=0.25,
+        help="Saturation jitter amount; factor sampled from [1-x, 1+x].",
+    )
+    parser.add_argument(
         "--hue-jitter",
         type=float,
         default=0.05,
         help="Hue jitter amount; shift sampled from [-x, x].",
+    )
+    parser.add_argument(
+        "--gamma-jitter",
+        type=float,
+        default=0.2,
+        help="Gamma jitter amount; factor sampled from [max(0.1, 1-x), 1+x].",
     )
     parser.add_argument(
         "--noise-std-max",
@@ -456,7 +470,9 @@ def to_mlflow_params(
     if args.augment:
         params["brightness_jitter"] = args.brightness_jitter
         params["contrast_jitter"] = args.contrast_jitter
+        params["saturation_jitter"] = args.saturation_jitter
         params["hue_jitter"] = args.hue_jitter
+        params["gamma_jitter"] = args.gamma_jitter
         params["noise_std_max"] = args.noise_std_max
         params["blur_prob"] = args.blur_prob
         params["blur_sigma_max"] = args.blur_sigma_max
@@ -496,7 +512,9 @@ def main() -> None:
         augment=args.augment,
         brightness_jitter=args.brightness_jitter,
         contrast_jitter=args.contrast_jitter,
+        saturation_jitter=args.saturation_jitter,
         hue_jitter=args.hue_jitter,
+        gamma_jitter=args.gamma_jitter,
         noise_std_max=args.noise_std_max,
         blur_prob=args.blur_prob,
         blur_sigma_max=args.blur_sigma_max,

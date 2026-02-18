@@ -35,6 +35,7 @@ DEPTH_VIS_RANGE_M = (0.0, 10.0)
 DEPTH_CONTOUR_STEP_M = 0.5
 DEPTH_CONTOUR_COLOR_BGR = (0, 255, 0)
 CONFIDENCE_COLORMAP = cv2.COLORMAP_VIRIDIS
+CONFIDENCE_VIS_RANGE = (0.0, 5.0)
 
 
 class RectificationData:
@@ -597,7 +598,11 @@ def main() -> None:
                 if confidence_patch.size > 0
                 else float("nan")
             )
-            confidence_vis = colorize_scalar_map(confidence_map, CONFIDENCE_COLORMAP)
+            confidence_vis = colorize_scalar_map(
+                confidence_map,
+                CONFIDENCE_COLORMAP,
+                fixed_range=CONFIDENCE_VIS_RANGE,
+            )
             confidence_vis = cv2.resize(
                 confidence_vis,
                 (view_l.shape[1], view_l.shape[0]),

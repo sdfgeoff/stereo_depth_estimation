@@ -82,7 +82,9 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
         augment: bool = False,
         brightness_jitter: float = 0.0,
         contrast_jitter: float = 0.0,
+        saturation_jitter: float = 0.0,
         hue_jitter: float = 0.0,
+        gamma_jitter: float = 0.0,
         noise_std_max: float = 0.0,
         blur_prob: float = 0.0,
         blur_sigma_max: float = 0.0,
@@ -95,7 +97,9 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
         self.augment = augment
         self.brightness_jitter = brightness_jitter
         self.contrast_jitter = contrast_jitter
+        self.saturation_jitter = saturation_jitter
         self.hue_jitter = hue_jitter
+        self.gamma_jitter = gamma_jitter
         self.noise_std_max = noise_std_max
         self.blur_prob = blur_prob
         self.blur_sigma_max = blur_sigma_max
@@ -111,6 +115,12 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
             raise ValueError(
                 f"blur_kernel_size must be odd and >= 3, got {self.blur_kernel_size}"
             )
+        if self.saturation_jitter < 0.0:
+            raise ValueError(
+                f"saturation_jitter must be >= 0, got {self.saturation_jitter}"
+            )
+        if self.gamma_jitter < 0.0:
+            raise ValueError(f"gamma_jitter must be >= 0, got {self.gamma_jitter}")
         if len(self.samples) == 0:
             raise ValueError("No samples were provided.")
 
@@ -185,6 +195,13 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
             return 0.0
         return float(torch.empty(1).uniform_(-self.hue_jitter, self.hue_jitter).item())
 
+    def _sample_gamma_factor(self) -> float:
+        if self.gamma_jitter <= 0.0:
+            return 1.0
+        low = max(0.1, 1.0 - self.gamma_jitter)
+        high = max(low, 1.0 + self.gamma_jitter)
+        return float(torch.empty(1).uniform_(low, high).item())
+
     def _sample_noise_std(self) -> float:
         if self.noise_std_max <= 0.0:
             return 0.0
@@ -207,7 +224,11 @@ class FoundationStereoDataset(Dataset[dict[str, torch.Tensor]]):
         image = TF.adjust_contrast(
             image, self._sample_jitter_factor(self.contrast_jitter)
         )
+        image = TF.adjust_saturation(
+            image, self._sample_jitter_factor(self.saturation_jitter)
+        )
         image = TF.adjust_hue(image, self._sample_hue_shift())
+        image = TF.adjust_gamma(image, gamma=self._sample_gamma_factor(), gain=1.0)
         if self._should_apply_blur():
             sigma = self._sample_blur_sigma()
             image = TF.gaussian_blur(
