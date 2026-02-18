@@ -68,7 +68,7 @@ def build_matcher(min_disp: int, num_disp: int, block_size: int) -> cv2.StereoSG
     cn = 1
     p1 = 8 * cn * block_size * block_size
     p2 = 32 * cn * block_size * block_size
-    return cv2.StereoSGBM_create(
+    return cv2.StereoSGBM.create(
         minDisparity=min_disp,
         numDisparities=num_disp,
         blockSize=block_size,
@@ -102,7 +102,8 @@ def main() -> None:
     P1 = data["P1"]
     P2 = data["P2"]
     Q = data["Q"]
-    image_size = tuple(int(v) for v in data["image_size"].tolist())
+    image_size_values = data["image_size"].tolist()
+    image_size = (int(image_size_values[0]), int(image_size_values[1]))
 
     map_l_1, map_l_2 = cv2.initUndistortRectifyMap(
         mtx_l, dist_l, R1, P1, image_size, cv2.CV_16SC2
@@ -171,7 +172,8 @@ def main() -> None:
         dist_m = np.nanmedian(patch)
 
         disp_vis = np.nan_to_num(disparity, nan=0.0)
-        disp_vis = cv2.normalize(disp_vis, None, 0, 255, cv2.NORM_MINMAX)
+        disp_vis_out = np.empty_like(disp_vis)
+        disp_vis = cv2.normalize(disp_vis, disp_vis_out, 0, 255, cv2.NORM_MINMAX)
         disp_vis = disp_vis.astype(np.uint8)
         disp_vis = cv2.applyColorMap(disp_vis, cv2.COLORMAP_TURBO)
 

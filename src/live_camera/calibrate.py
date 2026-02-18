@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -174,12 +175,14 @@ def main() -> None:
     if image_size is None:
         raise RuntimeError("No frames captured.")
 
+    # OpenCV accepts None for initial intrinsics/distortion, but type stubs do not.
+    cv_none: Any = None
     print("Running mono calibration...")
     rms_l, mtx_l, dist_l, _, _ = cv2.calibrateCamera(
-        obj_points, img_points_l, image_size, None, None
+        obj_points, img_points_l, image_size, cv_none, cv_none
     )
     rms_r, mtx_r, dist_r, _, _ = cv2.calibrateCamera(
-        obj_points, img_points_r, image_size, None, None
+        obj_points, img_points_r, image_size, cv_none, cv_none
     )
     print(f"Mono RMS left: {rms_l:.4f}, right: {rms_r:.4f}")
 

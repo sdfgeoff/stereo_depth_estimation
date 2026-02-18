@@ -27,4 +27,4 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Type check with Pyright
-        run: uv run pyright src/foundation_stereo_depth
+        run: uv run pyright src/foundation_stereo_depth src/live_camera

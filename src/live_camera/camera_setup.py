@@ -25,7 +25,12 @@ def configure_camera(cap: cv2.VideoCapture, config: CameraConfig) -> None:
     if len(config.fourcc) != 4:
         raise ValueError("--fourcc must be exactly 4 characters.")
 
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*config.fourcc.upper()))
+    fourcc_builder = getattr(cv2, "VideoWriter_fourcc", None)
+    if fourcc_builder is None:
+        fourcc_builder = cv2.VideoWriter.fourcc
+    fourcc_code = int((fourcc_builder)(*config.fourcc.upper()))
+
+    cap.set(cv2.CAP_PROP_FOURCC, fourcc_code)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.height)
     cap.set(cv2.CAP_PROP_FPS, config.fps)

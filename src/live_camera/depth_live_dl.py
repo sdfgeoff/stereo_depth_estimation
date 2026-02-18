@@ -296,7 +296,8 @@ def maybe_load_rectification(
     P1 = data["P1"]
     P2 = data["P2"]
     T = data["T"] if "T" in data else None
-    image_size = tuple(int(v) for v in data["image_size"].tolist())
+    image_size_values = data["image_size"].tolist()
+    image_size = (int(image_size_values[0]), int(image_size_values[1]))
 
     map_l_1, map_l_2 = cv2.initUndistortRectifyMap(
         mtx_l, dist_l, R1, P1, image_size, cv2.CV_16SC2
@@ -549,7 +550,7 @@ def main() -> None:
         patch = patch[np.isfinite(patch) & (patch > 0.0)]
         center_disparity = float(np.median(patch)) if patch.size > 0 else float("nan")
 
-        if depth_enabled:
+        if depth_enabled and focal_length_px_model is not None and baseline_m is not None:
             depth_m = disparity_to_depth(
                 disparity, float(focal_length_px_model), float(baseline_m)
             )
@@ -580,6 +581,7 @@ def main() -> None:
             vis_title = "DL Disparity"
 
         center_confidence = float("nan")
+        confidence_vis: np.ndarray | None = None
         if uncertainty_available:
             confidence_map = confidence_from_logvar(logvar)
             confidence_patch = confidence_map[y0:y1, x0:x1]
@@ -667,7 +669,7 @@ def main() -> None:
             (255, 255, 255),
             2,
         )
-        if uncertainty_available:
+        if uncertainty_available and confidence_vis is not None:
             confidence_text = (
                 f"center confidence: {center_confidence:.3f}"
                 if np.isfinite(center_confidence)
@@ -710,7 +712,7 @@ def main() -> None:
             view_r,
         )
         cv2.imshow(vis_title, depth_vis)
-        if uncertainty_available:
+        if uncertainty_available and confidence_vis is not None:
             cv2.imshow("DL Confidence", confidence_vis)
         else:
             try:
